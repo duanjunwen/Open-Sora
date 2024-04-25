@@ -16,7 +16,7 @@ vae = dict(
 )
 text_encoder = dict(
     type="t5",
-    from_pretrained="./pretrained_models/t5_ckpts",
+    from_pretrained="DeepFloyd/t5-v1_1-xxl",
     model_max_length=120,
 )
 scheduler = dict(
@@ -24,10 +24,10 @@ scheduler = dict(
     num_sampling_steps=20,
     cfg_scale=7.0,
 )
-dtype = "fp16"
+dtype = "bf16"
 
 # Others
 batch_size = 2
 seed = 42
 prompt_path = "./assets/texts/t2i_samples.txt"
-save_dir = "./outputs/samples/"
+save_dir = "./samples/samples/"

@@ -1,16 +1,16 @@
-num_frames = 16
-frame_interval = 3
-image_size = (256, 256)
-
 # Define dataset
-root = None
-data_path = "CSV_PATH"
-use_image_transform = False
-num_workers = 4
+dataset = dict(
+    type="VideoTextDataset",
+    data_path=None,
+    num_frames=16,
+    frame_interval=3,
+    image_size=(256, 256),
+)
 
 # Define acceleration
+num_workers = 4
 dtype = "bf16"
-grad_checkpoint = False
+grad_checkpoint = True
 plugin = "zero2"
 sp_size = 1
 
@@ -29,7 +29,7 @@ vae = dict(
 )
 text_encoder = dict(
     type="t5",
-    from_pretrained="./pretrained_models/t5_ckpts",
+    from_pretrained="DeepFloyd/t5-v1_1-xxl",
     model_max_length=120,
     shardformer=True,
 )
