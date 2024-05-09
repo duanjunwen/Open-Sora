@@ -3,6 +3,7 @@ from datetime import timedelta
 from pprint import pprint
 
 import torch
+import torch_musa
 import torch.distributed as dist
 import wandb
 from colossalai.booster import Booster
@@ -43,13 +44,16 @@ def main():
     # ======================================================
     # 2. runtime variables & colossalai launch
     # ======================================================
-    assert torch.cuda.is_available(), "Training currently requires at least one GPU."
+    # assert torch.cuda.is_available(), "Training currently requires at least one GPU."
+    assert torch.musa.is_available(), "Training currently requires at least one GPU."
     assert cfg.dtype in ["fp16", "bf16"], f"Unknown mixed precision {cfg.dtype}"
 
     # 2.1. colossalai init distributed training
     # we set a very large timeout to avoid some processes exit early
-    dist.init_process_group(backend="nccl", timeout=timedelta(hours=24))
-    torch.cuda.set_device(dist.get_rank() % torch.cuda.device_count())
+    # dist.init_process_group(backend="nccl", timeout=timedelta(hours=24))
+    dist.init_process_group(backend="mccl", timeout=timedelta(hours=24))
+    # torch.cuda.set_device(dist.get_rank() % torch.cuda.device_count())
+    torch.musa.set_device(dist.get_rank() % torch.musa.device_count())
     set_seed(1024)
     coordinator = DistCoordinator()
     device = get_current_device()
@@ -133,7 +137,8 @@ def main():
         input_size=latent_size,
         in_channels=vae.out_channels,
         caption_channels=text_encoder.output_dim,
-        model_max_length=text_encoder.model_max_length
+        model_max_length=text_encoder.model_max_length,
+        dtype=dtype,
     )
     model_numel, model_numel_trainable = get_model_numel(model)
     logger.info(

@@ -2,6 +2,7 @@ from typing import Callable
 
 import numpy as np
 import torch
+import torch_musa
 
 
 # ==================================

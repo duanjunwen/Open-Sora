@@ -267,13 +267,14 @@ class STDiT(nn.Module):
         Returns:
             x (torch.Tensor): output latent representation; of shape [B, C, T, H, W]
         """
-
+        B = x.shape[0]
         x = x.to(self.dtype)
         timestep = timestep.to(self.dtype)
         y = y.to(self.dtype)
 
         # embedding
         x = self.x_embedder(x)  # [B, N, C]
+        
         x = rearrange(x, "B (T S) C -> B T S C", T=self.num_temporal, S=self.num_spatial)
         x = x + self.pos_embed
         x = rearrange(x, "B T S C -> B (T S) C")
@@ -293,16 +294,41 @@ class STDiT(nn.Module):
             t0_mlp = None
         y = self.y_embedder(y, self.training)  # [B, 1, N_token, C]
 
+        # mask reshape for xformers.ops
         if mask is not None:
             if mask.shape[0] != y.shape[0]:
                 mask = mask.repeat(y.shape[0] // mask.shape[0], 1)
             mask = mask.squeeze(1).squeeze(1)
             y = y.squeeze(1).masked_select(mask.unsqueeze(-1) != 0).view(1, -1, x.shape[-1])
-            y_lens = mask.sum(dim=1).tolist()
+            y_lens = mask.view(B, 1, 1, y.shape[-2])
+            # mask = mask.repeat(x.shape[-2], 1)
+            # y_lens = mask.sum(dim=1).tolist()
         else:
             y_lens = [y.shape[2]] * y.shape[0]
             y = y.squeeze(1).view(1, -1, x.shape[-1])
-
+            
+        # # TODO Method 1: mask[B, 120] repeat reshape to [q_seq_len, k_seq_len] 
+        # if mask is not None:
+        #     if mask.shape[0] != y.shape[0]:
+        #         mask = mask.repeat(y.shape[0] // mask.shape[0], 1)
+        #     mask = mask.squeeze(1).squeeze(1)
+        #     y = y.squeeze(1).masked_select(mask.unsqueeze(-1) != 0).view(1, -1, x.shape[-1])
+        #     mask = mask.repeat(x.shape[-2], 1) # reshape to [q_seq_len, k_seq_len]
+        #     y_lens = mask
+        # else:
+        #     # y_lens = [y.shape[2]] * y.shape[0]
+        #     y_lens = mask
+        #     y = y.squeeze(1).view(1, -1, x.shape[-1])
+        
+        # # TODO Method 2:mask input as [q_seq_len, k_seq_len] 
+        # if mask is not None:            
+        #     y = y.squeeze(1).view(1, -1, x.shape[-1])
+        #     y_lens = mask
+        # else:
+        #     # y_lens = [y.shape[2]] * y.shape[0]
+        #     y = y.squeeze(1).view(1, -1, x.shape[-1])
+        #     y_lens = None
+        
         # blocks
         for i, block in enumerate(self.blocks):
             if i == 0:

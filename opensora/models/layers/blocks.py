@@ -26,7 +26,8 @@ from timm.models.vision_transformer import Mlp
 from opensora.acceleration.communications import all_to_all, split_forward_gather_backward
 from opensora.acceleration.parallel_states import get_sequence_parallel_group
 
-approx_gelu = lambda: nn.GELU(approximate="tanh")
+# approx_gelu = lambda: nn.GELU(approximate="tanh")
+approx_gelu = lambda: nn.GELU(approximate="none") #  Musa GELU op only support approximate is None now!
 
 
 class LlamaRMSNorm(nn.Module):
@@ -139,7 +140,7 @@ class Attention(nn.Module):
         attn_drop: float = 0.0,
         proj_drop: float = 0.0,
         norm_layer: nn.Module = LlamaRMSNorm,
-        enable_flash_attn: bool = False,
+        enable_flashattn: bool = False,
         rope=None,
     ) -> None:
         super().__init__()
@@ -148,7 +149,7 @@ class Attention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.scale = self.head_dim**-0.5
-        self.enable_flash_attn = enable_flash_attn
+        self.enable_flashattn = enable_flashattn
 
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
@@ -165,7 +166,7 @@ class Attention(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, N, C = x.shape
         # flash attn is not memory efficient for small sequences, this is empirical
-        enable_flash_attn = self.enable_flash_attn and (N > B)
+        enable_flashattn = self.enable_flashattn and (N > B)
         qkv = self.qkv(x)
         qkv_shape = (B, N, 3, self.num_heads, self.head_dim)
 
@@ -177,7 +178,7 @@ class Attention(nn.Module):
             k = self.rotary_emb(k)
         q, k = self.q_norm(q), self.k_norm(k)
 
-        if enable_flash_attn:
+        if enable_flashattn:
             from flash_attn import flash_attn_func
 
             # (B, #heads, N, #dim) -> (B, N, #heads, #dim)
@@ -202,7 +203,7 @@ class Attention(nn.Module):
             x = attn @ v
 
         x_output_shape = (B, N, C)
-        if not enable_flash_attn:
+        if not enable_flashattn:
             x = x.transpose(1, 2)
         x = x.reshape(x_output_shape)
         x = self.proj(x)
@@ -220,7 +221,7 @@ class SeqParallelAttention(Attention):
         attn_drop: float = 0.0,
         proj_drop: float = 0.0,
         norm_layer: nn.Module = LlamaRMSNorm,
-        enable_flash_attn: bool = False,
+        enable_flashattn: bool = False,
         rope=None,
     ) -> None:
         assert rope is None, "Rope is not supported in SeqParallelAttention"
@@ -232,7 +233,7 @@ class SeqParallelAttention(Attention):
             attn_drop=attn_drop,
             proj_drop=proj_drop,
             norm_layer=norm_layer,
-            enable_flash_attn=enable_flash_attn,
+            enable_flashattn=enable_flashattn,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -248,7 +249,7 @@ class SeqParallelAttention(Attention):
         # [B, SUB_N, 3, NUM_HEAD, HEAD_DIM] -> [B, N, 3, NUM_HEAD_PER_DEVICE, HEAD_DIM]
         qkv = all_to_all(qkv, sp_group, scatter_dim=3, gather_dim=1)
 
-        if self.enable_flash_attn:
+        if self.enable_flashattn:
             qkv_permute_shape = (
                 2,
                 0,
@@ -269,7 +270,7 @@ class SeqParallelAttention(Attention):
         # ERROR: Should qk_norm first
         q, k, v = qkv.unbind(0)
         q, k = self.q_norm(q), self.k_norm(k)
-        if self.enable_flash_attn:
+        if self.enable_flashattn:
             from flash_attn import flash_attn_func
 
             x = flash_attn_func(
@@ -289,7 +290,7 @@ class SeqParallelAttention(Attention):
             attn = self.attn_drop(attn)
             x = attn @ v
 
-        if not self.enable_flash_attn:
+        if not self.enable_flashattn:
             x = x.transpose(1, 2)
 
         # apply all to all to gather back attention heads and split sequence
@@ -318,21 +319,20 @@ class MultiHeadCrossAttention(nn.Module):
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(d_model, d_model)
         self.proj_drop = nn.Dropout(proj_drop)
+        
 
     def forward(self, x, cond, mask=None):
         # query/value: img tokens; key: condition; mask: if padding tokens
         B, N, C = x.shape
-
-        q = self.q_linear(x).view(1, -1, self.num_heads, self.head_dim)
-        kv = self.kv_linear(cond).view(1, -1, 2, self.num_heads, self.head_dim)
+        q = self.q_linear(x).view(1, self.num_heads, -1, self.head_dim)
+        kv = self.kv_linear(cond).view(1, self.num_heads, 2, -1, self.head_dim)
         k, v = kv.unbind(2)
-
-        attn_bias = None
+        # repeat mask along dim q_seq_length
         if mask is not None:
-            attn_bias = xformers.ops.fmha.BlockDiagonalMask.from_seqlens([N] * B, mask)
-        x = xformers.ops.memory_efficient_attention(q, k, v, p=self.attn_drop.p, attn_bias=attn_bias)
-
-        x = x.view(B, -1, C)
+            mask = mask.repeat(1, 1 , q.shape[-2], 1)
+        x = F.scaled_dot_product_attention(q ,k ,v, attn_mask=mask, dropout_p=self.attn_drop.p)
+        
+        x = x.contiguous().view(B, -1, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -378,12 +378,14 @@ class SeqParallelMultiHeadCrossAttention(MultiHeadCrossAttention):
 
         # compute attention
         attn_bias = None
-        if mask is not None:
-            attn_bias = xformers.ops.fmha.BlockDiagonalMask.from_seqlens([N] * B, mask)
-        x = xformers.ops.memory_efficient_attention(q, k, v, p=self.attn_drop.p, attn_bias=attn_bias)
+        # if mask is not None:
+        #     attn_bias = xformers.ops.fmha.BlockDiagonalMask.from_seqlens([N] * B, mask)
+        # x = xformers.ops.memory_efficient_attention(q, k, v, p=self.attn_drop.p, attn_bias=attn_bias)
+        x = F.scaled_dot_product_attention(query=q, key=k, value=v, attn_mask=mask, dropout_p=self.attn_drop.p)
 
         # apply all to all to gather back attention heads and scatter sequence
-        x = x.view(B, -1, self.num_heads // sp_size, self.head_dim)
+        # x = x.view(B, -1, self.num_heads // sp_size, self.head_dim)
+        x = x.contiguous().view(B, -1, self.num_heads // sp_size, self.head_dim)
         x = all_to_all(x, sp_group, scatter_dim=1, gather_dim=2)
 
         # apply output projection
@@ -571,10 +573,13 @@ class CaptionEmbedder(nn.Module):
         in_channels,
         hidden_size,
         uncond_prob,
-        act_layer=nn.GELU(approximate="tanh"),
+        # act_layer=nn.GELU(approximate="tanh"),
+        act_layer=nn.GELU, 
         token_num=120,
     ):
         super().__init__()
+        # act_layer.approximate = "tanh"
+        act_layer.approximate = "none" # Musa GELU op only support approximate is None now!
         self.y_proj = Mlp(
             in_features=in_channels,
             hidden_features=hidden_size,
@@ -593,7 +598,8 @@ class CaptionEmbedder(nn.Module):
         Drops labels to enable classifier-free guidance.
         """
         if force_drop_ids is None:
-            drop_ids = torch.rand(caption.shape[0]).cuda() < self.uncond_prob
+            # drop_ids = torch.rand(caption.shape[0]).cuda() < self.uncond_prob
+            drop_ids = torch.rand(caption.shape[0]).to(device="musa") < self.uncond_prob
         else:
             drop_ids = force_drop_ids == 1
         caption = torch.where(drop_ids[:, None, None, None], self.y_embedding, caption)

@@ -11,11 +11,13 @@ from opensora.models.text_encoder.t5 import T5Embedder
 
 
 def run_t5_encoder(rank, world_size, port):
-    colossalai.launch({}, rank=rank, world_size=world_size, port=port, host="localhost")
+    colossalai.launch({}, rank=rank, world_size=world_size, port=port, host="localhost", backend="mccl")
 
     # t5 embedder
-    t5_path = "./pretrained_models/t5_ckpts"
-    hf_t5 = T5Embedder(device="cuda", local_cache=True, cache_dir=t5_path, torch_dtype=torch.float)
+    t5_path = "./pretrained_models/t5_ckpts/"
+    pretrain_path = "./pretrained_models/t5_ckpts/t5-v1_1-xxl"
+    # hf_t5 = T5Embedder(device="musa", local_cache=True, cache_dir=t5_path, torch_dtype=torch.float)
+    hf_t5 = T5Embedder(device="musa", cache_dir=t5_path, from_pretrained=pretrain_path, torch_dtype=torch.float)
     sf_t5 = deepcopy(hf_t5)
 
     # create huggingface model as normal
@@ -44,20 +46,25 @@ def run_t5_encoder(rank, world_size, port):
     assert torch.allclose(hf_masks, sf_masks), f"{hf_masks} \nvs\n{sf_masks}"
 
     # measure perf
-    torch.cuda.synchronize()
+    # torch.cuda.synchronize()
+    torch.musa.synchronize()
     hf_start = time.time()
     for i in range(20):
         hf_embs, hf_masks = hf_t5.get_text_embeddings(texts)
-    torch.cuda.synchronize()
+    # torch.cuda.synchronize()
+    torch.musa.synchronize()
     hf_end = time.time()
 
     # convert sf to fp16
-    hf_t5.model = hf_t5.model.half()
-    torch.cuda.synchronize()
+    # hf_t5.model = hf_t5.model.half() # RuntimeError: "clamp_cpu" not implemented for 'Half'
+    hf_t5.model = hf_t5.model
+    # torch.cuda.synchronize()
+    torch.musa.synchronize()
     sf_start = time.time()
     for i in range(20):
         hf_embs, hf_masks = hf_t5.get_text_embeddings(texts)
-    torch.cuda.synchronize()
+    # torch.cuda.synchronize()
+    torch.musa.synchronize()
     sf_end = time.time()
 
     print(f"[Performance] native: {hf_end - hf_start}s, shardformer: {sf_end - sf_start} s")
