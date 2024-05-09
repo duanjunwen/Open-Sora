@@ -164,12 +164,14 @@ class GaussianDiffusion:
     """
 
     def __init__(
-        self, *, betas: torch.Tensor, model_mean_type: str, model_var_type: str, loss_type: str, device: str = "cuda"
+        self, *, betas: torch.Tensor, model_mean_type: str, model_var_type: str, loss_type: str, device: str = "musa"
     ):
         if device == "cuda":
             device = torch.device(f"cuda:{torch.cuda.current_device()}")
         elif device == "cpu":
             device = torch.device("cpu")
+        elif device == "musa":
+            device = torch.device(f"musa:{torch.musa.current_device()}")
         else:
             raise ValueError(f"Unknown device: {device}")
         self.device = device
@@ -178,14 +180,18 @@ class GaussianDiffusion:
         self.loss_type = loss_type
 
         # Use float64 for accuracy.
-        self.betas = betas.to(self.device)
+        self.betas = betas.to(dtype=torch.float32, device=self.device)
         assert len(self.betas.shape) == 1, "betas must be 1-D"
         assert (self.betas > 0).all() and (self.betas <= 1).all()
 
         self.num_timesteps = int(betas.shape[0])
-
         alphas = 1.0 - self.betas
-        self.alphas_cumprod = torch.cumprod(alphas, axis=0)
+        # self.alphas_cumprod = torch.cumprod(alphas, axis=0)
+        # NotImplementedError: MuDNN noy support torch.cumprod; So replace by
+        self.alphas_cumprod = torch.Tensor([torch.prod(alphas[:i+1]) for i in range(len(alphas))]).to(alphas)
+        
+        
+        
         self.alphas_cumprod_prev = torch.cat([torch.tensor([1.0], device=self.device), self.alphas_cumprod[:-1]])
         self.alphas_cumprod_next = torch.cat([self.alphas_cumprod[1:], torch.tensor([0.0], device=self.device)])
         assert self.alphas_cumprod_prev.shape == (self.num_timesteps,)
