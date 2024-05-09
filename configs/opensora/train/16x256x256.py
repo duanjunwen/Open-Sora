@@ -20,7 +20,8 @@ model = dict(
     space_scale=0.5,
     time_scale=1.0,
     # from_pretrained="PixArt-XL-2-512x512.pth",
-    from_pretrained="./pretrained_models/PixArt-alpha/PixArt-XL-2-512x512.pth"
+    # from_pretrained="./pretrained_models/PixArt-alpha/PixArt-XL-2-512x512.pth",
+    from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth",
     enable_flashattn=True,
     enable_layernorm_kernel=True,
 )

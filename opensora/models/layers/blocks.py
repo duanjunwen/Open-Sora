@@ -47,17 +47,19 @@ class LlamaRMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
 
+# def get_layernorm(hidden_size: torch.Tensor, eps: float, affine: bool, use_kernel: bool):
+#     if use_kernel:
+#         try:
+#             from apex.normalization import FusedLayerNorm
+
+#             return FusedLayerNorm(hidden_size, elementwise_affine=affine, eps=eps)
+#         except ImportError:
+#             raise RuntimeError("FusedLayerNorm not available. Please install apex.")
+#     else:
+#         return nn.LayerNorm(hidden_size, eps, elementwise_affine=affine)
+
 def get_layernorm(hidden_size: torch.Tensor, eps: float, affine: bool, use_kernel: bool):
-    if use_kernel:
-        try:
-            from apex.normalization import FusedLayerNorm
-
-            return FusedLayerNorm(hidden_size, elementwise_affine=affine, eps=eps)
-        except ImportError:
-            raise RuntimeError("FusedLayerNorm not available. Please install apex.")
-    else:
-        return nn.LayerNorm(hidden_size, eps, elementwise_affine=affine)
-
+    return nn.LayerNorm(hidden_size, eps, elementwise_affine=affine)
 
 def modulate(norm_func, x, shift, scale):
     # Suppose x is (B, N, D), shift is (B, D), scale is (B, D)

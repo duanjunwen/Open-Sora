@@ -174,8 +174,8 @@ def test_stdit_xl_2(device):
     device = torch.device(device)
     dtype = torch.float32
     
-    stdit_xl_2 = STDiT_XL_2(from_pretrained="/home/dist/hpcai/duanjunwen/Open-Sora/pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth").to(device)
-    # stdit_xl_2 = STDiT_XL_2(from_pretrained="./pretrained_models/PixArt-alpha/PixArt-XL-2-512x512.pth").to(device)
+    # stdit_xl_2 = STDiT_XL_2(from_pretrained="/home/dist/hpcai/duanjunwen/Open-Sora/pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth").to(device)
+    stdit_xl_2 = STDiT_XL_2(from_pretrained="./pretrained_models/PixArt-alpha/PixArt-XL-2-512x512.pth").to(device)
     
     
     x = torch.randn(B, C, T, H, W, dtype=dtype).to(device)  # (B, C, T, H, W)

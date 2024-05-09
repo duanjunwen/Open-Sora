@@ -48,7 +48,7 @@ setup(
     long_description=fetch_readme(),
     long_description_content_type="text/markdown",
     license="Apache Software License 2.0",
-    install_requires=fetch_requirements("requirements.txt"),
+    # install_requires=fetch_requirements("requirements.txt"),
     python_requires=">=3.6",
     classifiers=[
         "Programming Language :: Python :: 3",
