@@ -84,7 +84,8 @@ class AestheticScorer(nn.Module):
     def __init__(self, input_size, device):
         super().__init__()
         self.mlp = MLP(input_size)
-        self.mlp.load_state_dict(torch.load("pretrained_models/aesthetic.pth"))
+        # self.mlp.load_state_dict(torch.load("pretrained_models/aesthetic.pth"))
+        self.mlp.load_state_dict(torch.load("pretrained_models/aesthetic-model.pth"))
         self.clip, self.preprocess = clip.load("ViT-L/14", device=device)
 
         self.eval()

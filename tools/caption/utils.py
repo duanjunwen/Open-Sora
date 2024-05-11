@@ -46,6 +46,8 @@ PROMPTS = {
     },
 }
 
+IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".ppm", ".bmp", ".pgm", ".tif", ".tiff", ".webp")
+VID_EXTENSIONS = (".mp4", ".avi", ".mov", ".mkv")
 
 NUM_FRAMES_POINTS = {
     1: (0.5,),
