@@ -19,7 +19,7 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
-import xformers.ops
+# import xformers.ops
 from einops import rearrange
 from timm.models.vision_transformer import Mlp
 
@@ -179,7 +179,7 @@ class Attention(nn.Module):
             q = self.rotary_emb(q)
             k = self.rotary_emb(k)
         q, k = self.q_norm(q), self.k_norm(k)
-
+        enable_flashattn=False # disable_flashattn
         if enable_flashattn:
             from flash_attn import flash_attn_func
 
@@ -332,6 +332,8 @@ class MultiHeadCrossAttention(nn.Module):
         # repeat mask along dim q_seq_length
         if mask is not None:
             mask = mask.repeat(1, 1 , q.shape[-2], 1)
+        # print(f"num_heads {self.num_heads} d_model {self.d_model} self.head_dim {self.head_dim}")
+        # print(f"q_shape {q.shape} k_shape {k.shape} v_shape {v.shape} mask_shape {mask.shape}")
         x = F.scaled_dot_product_attention(q ,k ,v, attn_mask=mask, dropout_p=self.attn_drop.p)
         
         x = x.contiguous().view(B, -1, C)

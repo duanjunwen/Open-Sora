@@ -132,6 +132,7 @@ class STDiTBlock(nn.Module):
         x = x + self.drop_path(gate_msa * x_t)
 
         # cross attn
+        mask = mask.bool()
         x = x + self.cross_attn(x, y, mask)
 
         # mlp
@@ -294,41 +295,21 @@ class STDiT(nn.Module):
             t0_mlp = None
         y = self.y_embedder(y, self.training)  # [B, 1, N_token, C]
 
-        # mask reshape for xformers.ops
         if mask is not None:
             if mask.shape[0] != y.shape[0]:
                 mask = mask.repeat(y.shape[0] // mask.shape[0], 1)
-            mask = mask.squeeze(1).squeeze(1)
-            y = y.squeeze(1).masked_select(mask.unsqueeze(-1) != 0).view(1, -1, x.shape[-1])
-            y_lens = mask.view(B, 1, 1, y.shape[-2])
+            mask = mask.squeeze(1).squeeze(1) # y shape ([1, 1, 120, 1152]); mask shape [120]
+            # y = y.float() # RuntimeError: Dtype of input tensor of masked_select only support Float32/Int32/Int64, but now it is Half
+            # y = y.squeeze(1).masked_select(mask.unsqueeze(-1) != 0).view(1, -1, x.shape[-1])
+            # y = y.half()
+            # print(f"before mask x{x.shape} y {y.shape} mask {mask.shape}")
+            y_lens = mask.view(B, 1, 1, 120) # last dim always 120
             # mask = mask.repeat(x.shape[-2], 1)
             # y_lens = mask.sum(dim=1).tolist()
         else:
             y_lens = [y.shape[2]] * y.shape[0]
             y = y.squeeze(1).view(1, -1, x.shape[-1])
             
-        # # TODO Method 1: mask[B, 120] repeat reshape to [q_seq_len, k_seq_len] 
-        # if mask is not None:
-        #     if mask.shape[0] != y.shape[0]:
-        #         mask = mask.repeat(y.shape[0] // mask.shape[0], 1)
-        #     mask = mask.squeeze(1).squeeze(1)
-        #     y = y.squeeze(1).masked_select(mask.unsqueeze(-1) != 0).view(1, -1, x.shape[-1])
-        #     mask = mask.repeat(x.shape[-2], 1) # reshape to [q_seq_len, k_seq_len]
-        #     y_lens = mask
-        # else:
-        #     # y_lens = [y.shape[2]] * y.shape[0]
-        #     y_lens = mask
-        #     y = y.squeeze(1).view(1, -1, x.shape[-1])
-        
-        # # TODO Method 2:mask input as [q_seq_len, k_seq_len] 
-        # if mask is not None:            
-        #     y = y.squeeze(1).view(1, -1, x.shape[-1])
-        #     y_lens = mask
-        # else:
-        #     # y_lens = [y.shape[2]] * y.shape[0]
-        #     y = y.squeeze(1).view(1, -1, x.shape[-1])
-        #     y_lens = None
-        
         # blocks
         for i, block in enumerate(self.blocks):
             if i == 0:
@@ -458,7 +439,9 @@ class STDiT(nn.Module):
 
 @MODELS.register_module("STDiT-XL/2")
 def STDiT_XL_2(from_pretrained=None, **kwargs):
-    model = STDiT(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=16, **kwargs)
+    # model = STDiT(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=16, **kwargs)
+    model = STDiT(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=18, **kwargs)
+    # model = STDiT(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=9, **kwargs)
     if from_pretrained is not None:
         load_checkpoint(model, from_pretrained)
     return model

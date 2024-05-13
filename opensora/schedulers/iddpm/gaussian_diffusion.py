@@ -187,9 +187,8 @@ class GaussianDiffusion:
 
         self.num_timesteps = int(betas.shape[0])
         alphas = 1.0 - self.betas
-        self.alphas_cumprod = torch.cumprod(alphas, axis=0)
-        # NotImplementedError: MuDNN noy support torch.cumprod; So replace with
-        # self.alphas_cumprod = torch.Tensor([torch.prod(alphas[:i+1]) for i in range(len(alphas))]).to(alphas)
+        # self.alphas_cumprod = torch.cumprod(alphas, axis=0)
+        self.alphas_cumprod = torch.Tensor([torch.prod(alphas[:i+1]) for i in range(len(alphas))]).to(alphas)
         
         self.alphas_cumprod_prev = torch.cat([torch.tensor([1.0], device=self.device), self.alphas_cumprod[:-1]])
         self.alphas_cumprod_next = torch.cat([self.alphas_cumprod[1:], torch.tensor([0.0], device=self.device)])

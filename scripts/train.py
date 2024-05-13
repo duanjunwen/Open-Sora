@@ -47,7 +47,7 @@ def main():
     # assert torch.cuda.is_available(), "Training currently requires at least one GPU."
     assert torch.musa.is_available(), "Training currently requires at least one GPU."
     assert cfg.dtype in ["fp16", "bf16"], f"Unknown mixed precision {cfg.dtype}"
-
+    # torch.backends.cuda.enable_flash_sdp(enabled=False) # MUSA only support flash atten dim <= 128; but pretrained has 512
     # 2.1. colossalai init distributed training
     # we set a very large timeout to avoid some processes exit early
     # dist.init_process_group(backend="nccl", timeout=timedelta(hours=24))
@@ -56,7 +56,7 @@ def main():
     torch.musa.set_device(dist.get_rank() % torch.musa.device_count())
     set_seed(1024)
     coordinator = DistCoordinator()
-    device = get_current_device()
+    device = get_current_device()  # device musa:0
     dtype = to_torch_dtype(cfg.dtype)
 
     # 2.2. init logger, tensorboard & wandb
