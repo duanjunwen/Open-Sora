@@ -10,8 +10,8 @@ dataset = dict(
 # Define acceleration
 num_workers = 4
 # dtype = "bf16"
-# dtype = "fp16"
-dtype = "fp32"
+dtype = "fp16"
+# dtype = "fp32"
 grad_checkpoint = True
 plugin = "zero2"
 sp_size = 1
@@ -67,3 +67,5 @@ load = None
 batch_size = 1
 lr = 2e-5
 grad_clip = 1.0
+
+random_dataset = True

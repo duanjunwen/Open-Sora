@@ -248,7 +248,7 @@ def test_stdit_xl_2_step(device):
     optimizer.step()
     optimizer.zero_grad()
     
-    print(f"Param after step:\n {model_param}")
+    # print(f"Param after step:\n {model_param}")
  
 
 if __name__ == "__main__":

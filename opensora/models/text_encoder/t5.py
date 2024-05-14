@@ -26,6 +26,7 @@ import re
 
 import ftfy
 import torch
+import torch_musa
 from transformers import AutoTokenizer, T5EncoderModel
 
 from opensora.registry import MODELS
@@ -141,7 +142,8 @@ class T5Encoder:
         self,
         from_pretrained=None,
         model_max_length=120,
-        device="cuda",
+        # device="cuda",
+        device="musa",
         dtype=torch.float,
         cache_dir=None,
         shardformer=False,

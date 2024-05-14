@@ -25,7 +25,7 @@ def parse_args(training=False):
     parser.add_argument("--seed", default=42, type=int, help="generation seed")
     parser.add_argument("--ckpt-path", type=str, help="path to model ckpt; will overwrite cfg.ckpt_path if specified")
     parser.add_argument("--batch-size", default=None, type=int, help="batch size")
-
+    
     # ======================================================
     # Inference
     # ======================================================
