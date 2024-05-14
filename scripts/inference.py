@@ -2,6 +2,7 @@ import os
 
 import colossalai
 import torch
+import torch_musa
 import torch.distributed as dist
 from colossalai.cluster import DistCoordinator
 from mmengine.runner import set_random_seed
@@ -24,7 +25,8 @@ def main():
     # init distributed
     if os.environ.get("WORLD_SIZE", None):
         use_dist = True
-        colossalai.launch_from_torch({})
+        # colossalai.launch_from_torch({})
+        colossalai.launch({})
         coordinator = DistCoordinator()
 
         if coordinator.world_size > 1:
@@ -42,7 +44,8 @@ def main():
     torch.set_grad_enabled(False)
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "musa" if torch.musa.is_available() else "cpu"
     dtype = to_torch_dtype(cfg.dtype)
     set_random_seed(seed=cfg.seed)
     prompts = cfg.prompt

@@ -4,6 +4,7 @@ from pprint import pprint
 
 import torch
 import torch_musa
+from torch.optim import Adam, AdamW
 import torch.distributed as dist
 import wandb
 from colossalai.booster import Booster
@@ -46,7 +47,7 @@ def main():
     # ======================================================
     # assert torch.cuda.is_available(), "Training currently requires at least one GPU."
     assert torch.musa.is_available(), "Training currently requires at least one GPU."
-    assert cfg.dtype in ["fp32", "fp16", "bf16"], f"Unknown mixed precision {cfg.dtype}"
+    assert cfg.dtype in ["fp16", "bf16"], f"Unknown mixed precision {cfg.dtype}"
     # torch.backends.cuda.enable_flash_sdp(enabled=False) # MUSA only support flash atten dim <= 128; but pretrained has 512
     # 2.1. colossalai init distributed training
     # we set a very large timeout to avoid some processes exit early
@@ -94,7 +95,7 @@ def main():
     else:
         raise ValueError(f"Unknown plugin {cfg.plugin}")
     booster = Booster(plugin=plugin)
-    
+
     # ======================================================
     # 3. build dataset and dataloader
     # ======================================================
@@ -158,11 +159,16 @@ def main():
     scheduler = build_module(cfg.scheduler, SCHEDULERS)
 
     # 4.5. setup optimizer
-    optimizer = HybridAdam(
+    # optimizer = HybridAdam(
+    #     filter(lambda p: p.requires_grad, model.parameters()),
+    #     lr=cfg.lr,
+    #     weight_decay=0,
+    #     adamw_mode=True,
+    # )
+    optimizer = AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=cfg.lr,
         weight_decay=0,
-        adamw_mode=True,
     )
     lr_scheduler = None
 
@@ -218,7 +224,6 @@ def main():
         dataloader.sampler.set_start_index(sampler_start_idx)
     model_sharding(ema)
     # 6.2. training loop
-    print("Memory_reserved before loop: %fGB"%(torch.musa.memory_reserved()/1024/1024/1024))
     for epoch in range(start_epoch, cfg.epochs):
         if cfg.dataset.type == "VideoTextDataset":
             dataloader.sampler.set_epoch(epoch)
@@ -235,15 +240,13 @@ def main():
             for step, batch in pbar:
                 x = batch.pop("video").to(device, dtype)  # [B, C, T, H, W]
                 y = batch.pop("text")
+                
                 # Visual and text encoding
-                print("Memory_reserved before vae & encoder: %fGB"%(torch.musa.memory_reserved()/1024/1024/1024))
                 with torch.no_grad():
                     # Prepare visual inputs
                     x = vae.encode(x)  # [B, C, T, H/P, W/P]
                     # Prepare text inputs
                     model_args = text_encoder.encode(y)
-                print("Vae encoder pass")
-                print("Memory_reserved after vae & encoder: %fGB"%(torch.musa.memory_reserved()/1024/1024/1024))
                 # Mask
                 if cfg.mask_ratios is not None:
                     mask = mask_generator.get_masks(x)
@@ -257,41 +260,18 @@ def main():
 
                 # Diffusion
                 t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
-                print(f"x {x.shape}\n t {t}\n model_args {model_args}\n mask {mask}\n")
                 loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
-                print("Diffusion get loss pass")
-                print("Memory_reserved after Diffusion: %fGB"%(torch.musa.memory_reserved()/1024/1024/1024))
                 # Backward & update
                 loss = loss_dict["loss"].mean()
                 print(f"loss\n {loss}")
-                print("Memory_reserved after Diffusion: %fGB"%(torch.musa.memory_reserved()/1024/1024/1024))
-                booster.backward(loss=loss, optimizer=optimizer)
+                print("Bug occurs in booster.backward->optim.backward;")
+                # booster.backward(loss=loss, optimizer=optimizer)
+                loss.backward()
                 print("booster bwd pass")
                 optimizer.step()
                 optimizer.zero_grad()
-                print("optim step pass")
-                
-                # # Diffusion without booster
-                # t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
-                # print(f"x {x.shape}\n t {t}\n model_args {model_args}\n mask {mask}\n")
-                # loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
-                # output = model(x=x, timestep=t, y=model_args['y'], mask=model_args['mask'])
-                # print("Diffusion get loss pass")
-                # print("Memory_reserved after Diffusion: %fGB"%(torch.musa.memory_reserved()/1024/1024/1024))
-                # # Backward & update
-                # loss = output.mean()
-                # print(f"loss\n {loss}")
-                # print("Memory_reserved after Diffusion: %fGB"%(torch.musa.memory_reserved()/1024/1024/1024))
-                # # booster.backward(loss=loss, optimizer=optimizer)
-                # loss.backward()
-                # print("booster bwd pass")
-                # optimizer.step()
-                # optimizer.zero_grad()
-                # print("optim step pass")
-                
                 # Update EMA
                 update_ema(ema, model.module, optimizer=optimizer)
-                print("optim step pass")
 
                 # Log loss values:
                 all_reduce_mean(loss)
@@ -299,55 +279,6 @@ def main():
                 global_step = epoch * num_steps_per_epoch + step
                 log_step += 1
                 acc_step += 1
-
-                # Log to tensorboard
-                if coordinator.is_master() and (global_step + 1) % cfg.log_every == 0:
-                    avg_loss = running_loss / log_step
-                    pbar.set_postfix({"loss": avg_loss, "step": step, "global_step": global_step})
-                    running_loss = 0
-                    log_step = 0
-                    writer.add_scalar("loss", loss.item(), global_step)
-                    if cfg.wandb:
-                        wandb.log(
-                            {
-                                "iter": global_step,
-                                "epoch": epoch,
-                                "loss": loss.item(),
-                                "avg_loss": avg_loss,
-                                "acc_step": acc_step,
-                            },
-                            step=global_step,
-                        )
-
-                # Save checkpoint
-                if cfg.ckpt_every > 0 and (global_step + 1) % cfg.ckpt_every == 0:
-                    save(
-                        booster,
-                        model,
-                        ema,
-                        optimizer,
-                        lr_scheduler,
-                        epoch,
-                        step + 1,
-                        global_step + 1,
-                        cfg.batch_size,
-                        coordinator,
-                        exp_dir,
-                        ema_shape_dict,
-                        sampler=sampler_to_io,
-                    )
-                    logger.info(
-                        f"Saved checkpoint at epoch {epoch} step {step + 1} global_step {global_step + 1} to {exp_dir}"
-                    )
-
-        # the continue epochs are not resumed, so we need to reset the sampler start index and start step
-        if cfg.dataset.type == "VideoTextDataset":
-            dataloader.sampler.set_start_index(0)
-        if cfg.dataset.type == "VariableVideoTextDataset":
-            dataloader.batch_sampler.set_epoch(epoch + 1)
-            print("Epoch done, recomputing batch sampler")
-        start_step = 0
-    print("training loop pass")
 
 if __name__ == "__main__":
     main()

@@ -17,7 +17,7 @@ def parse_args(training=False):
     parser = argparse.ArgumentParser()
 
     # model config
-    parser.add_argument("config", help="model config file path")
+    parser.add_argument("config", default="./configs/opensora/train/16x256x256.py", type=str, help="model config file path")
 
     # ======================================================
     # General
@@ -62,7 +62,7 @@ def parse_args(training=False):
     else:
         parser.add_argument("--wandb", default=None, type=bool, help="enable wandb")
         parser.add_argument("--load", default=None, type=str, help="path to continue training")
-        parser.add_argument("--data-path", default=None, type=str, help="path to data csv")
+        parser.add_argument("--data-path", default="./dataset/panda2m/meta/meta_clips_caption_cleaned.csv", type=str, help="path to data csv")
         parser.add_argument("--start-from-scratch", action="store_true", help="start training from scratch")
 
     return parser.parse_args()

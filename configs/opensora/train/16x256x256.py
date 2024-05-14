@@ -10,7 +10,8 @@ dataset = dict(
 # Define acceleration
 num_workers = 4
 # dtype = "bf16"
-dtype = "fp16"
+# dtype = "fp16"
+dtype = "fp32"
 grad_checkpoint = True
 plugin = "zero2"
 sp_size = 1
@@ -26,6 +27,16 @@ model = dict(
     enable_flashattn=True,
     enable_layernorm_kernel=True,
 )
+
+# model = dict(
+#     type="STDiT2-XL/2",
+#     # from_pretrained="PixArt-XL-2-512x512.pth",
+#     # from_pretrained="./pretrained_models/PixArt-alpha/PixArt-XL-2-512x512.pth",
+#     from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth",
+#     enable_flashattn=True,
+#     enable_layernorm_kernel=True,
+# )
+
 vae = dict(
     type="VideoAutoencoderKL",
     # from_pretrained="stabilityai/sd-vae-ft-ema",
