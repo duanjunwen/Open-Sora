@@ -58,7 +58,7 @@ class STDiTBlock(nn.Module):
             hidden_size,
             num_heads=num_heads,
             qkv_bias=True,
-            enable_flashattn=enable_flashattn,
+            enable_flash_attn=self.enable_flashattn,
         )
         self.cross_attn = self.mha_cls(hidden_size, num_heads)
         self.norm2 = get_layernorm(hidden_size, eps=1e-6, affine=False, use_kernel=enable_layernorm_kernel)
@@ -82,7 +82,7 @@ class STDiTBlock(nn.Module):
             hidden_size,
             num_heads=num_heads,
             qkv_bias=True,
-            enable_flashattn=self.enable_flashattn,
+            enable_flash_attn=self.enable_flashattn,
         )
 
     def t_mask_select(self, x, masked_x, x_mask):

@@ -11,6 +11,9 @@ from colossalai.cluster import DistCoordinator
 from colossalai.nn.optimizer import HybridAdam
 from colossalai.utils import get_current_device, set_seed
 from tqdm import tqdm
+import functools
+from functools import partial
+from performance_evaluator import PerformanceEvaluator
 
 from opensora.acceleration.checkpoint import set_grad_checkpoint
 from opensora.acceleration.parallel_states import (
@@ -169,7 +172,28 @@ def main():
     ema.eval()
     if cfg.mask_ratios is not None:
         mask_generator = MaskGenerator(cfg.mask_ratios)
-
+        
+    # 4.7. initialize Evaluator
+    Evaluator = functools.partial(
+        PerformanceEvaluator,
+        model_numel=model_numel,
+        num_layers=model.num_heads,
+        hidden_size=model.hidden_size,
+        vocab_size=text_encoder.output_dim,
+        max_seq_length=512,
+        num_steps=31,
+        use_torch_profiler=False,
+        # torch_profiler_path=args.torch_profiler_path,
+        # enable_grad_checkpoint=args.grad_checkpoint,
+        # grad_checkpoint_ratio=args.grad_checkpoint_ratio,
+        # ignore_steps=args.ignore_steps,
+        # grad_accum=args.grad_accum,
+        # include_optimizer_time=args.include_optimizer_time,
+        # disable_internal_sync=args.disable_internal_sync,
+        # dp_size=dp_size,
+        # tp_size=args.tp,
+        # pp_size=args.pp
+    )
     # =======================================================
     # 5. boost model for distributed training with colossalai
     # =======================================================
@@ -215,6 +239,8 @@ def main():
     model_sharding(ema)
 
     # 6.2. training loop
+    performance_evaluator = Evaluator(weight_memory=model_numel)
+    performance_evaluator.on_fit_start()
     for epoch in range(start_epoch, cfg.epochs):
         if cfg.dataset.type == "VideoTextDataset":
             dataloader.sampler.set_epoch(epoch)
@@ -228,6 +254,7 @@ def main():
             initial=start_step,
             total=num_steps_per_epoch,
         ) as pbar:
+            performance_evaluator.start_new_iter()
             for step, batch in pbar:
                 x = batch.pop("video").to(device, dtype)  # [B, C, T, H, W]
                 y = batch.pop("text")
@@ -251,11 +278,14 @@ def main():
 
                 # Diffusion
                 t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
+                performance_evaluator.before_forward()
                 loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
 
                 # Backward & update
                 loss = loss_dict["loss"].mean()
+                performance_evaluator.before_backward()
                 booster.backward(loss=loss, optimizer=optimizer)
+                performance_evaluator.before_optimizer_update()
                 optimizer.step()
                 optimizer.zero_grad()
 
@@ -308,6 +338,8 @@ def main():
                     logger.info(
                         f"Saved checkpoint at epoch {epoch} step {step + 1} global_step {global_step + 1} to {exp_dir}"
                     )
+                performance_evaluator.end_iter(input_ids=torch.empty(cfg.batch_size, cfg.epochs))
+                performance_evaluator.start_new_iter()
 
         # the continue epochs are not resumed, so we need to reset the sampler start index and start step
         if cfg.dataset.type == "VideoTextDataset":
@@ -316,6 +348,7 @@ def main():
             dataloader.batch_sampler.set_epoch(epoch + 1)
             print("Epoch done, recomputing batch sampler")
         start_step = 0
+    performance_evaluator.on_fit_end()
 
 
 if __name__ == "__main__":

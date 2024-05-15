@@ -32,7 +32,8 @@ from opensora.registry import MODELS
 
 
 class T5Embedder:
-    available_models = ["DeepFloyd/t5-v1_1-xxl"]
+    # available_models = ["DeepFloyd/t5-v1_1-xxl"]
+    available_models = ["./pretrained_models/t5_ckpts/t5-v1_1-xxl"]
 
     def __init__(
         self,
