@@ -39,6 +39,7 @@ def main():
     # 1. args & cfg
     # ======================================================
     cfg = parse_configs(training=True)
+    print(f"cfg {cfg}")
     exp_name, exp_dir = create_experiment_workspace(cfg)
     save_training_config(cfg._cfg_dict, exp_dir)
 
@@ -195,165 +196,37 @@ def main():
     # =======================================================
     # 6. training loop
     # =======================================================
-    start_epoch = start_step = log_step = sampler_start_idx = acc_step = 0
-    running_loss = 0.0
-    sampler_to_io = dataloader.batch_sampler if cfg.dataset.type == "VariableVideoTextDataset" else None
     # 6.1. resume training
-    if cfg.load is not None:
-        logger.info("Loading checkpoint")
-        ret = load(
-            booster,
-            model,
-            ema,
-            optimizer,
-            lr_scheduler,
-            cfg.load,
-            sampler=sampler_to_io if not cfg.start_from_scratch else None,
-        )
-        if not cfg.start_from_scratch:
-            start_epoch, start_step, sampler_start_idx = ret
-        logger.info(f"Loaded checkpoint {cfg.load} at epoch {start_epoch} step {start_step}")
     logger.info(f"Training for {cfg.epochs} epochs with {num_steps_per_epoch} steps per epoch")
-
-    if cfg.dataset.type == "VideoTextDataset":
-        dataloader.sampler.set_start_index(sampler_start_idx)
     model_sharding(ema)
     # generator random sentence for y
     s = RandomSentence()
     # 6.2. training loop
-    for epoch in range(start_epoch, cfg.epochs):
-        if cfg.dataset.type == "VideoTextDataset":
-            dataloader.sampler.set_epoch(epoch)
-        dataloader_iter = iter(dataloader)
-        logger.info(f"Beginning epoch {epoch}...")
-
-        with tqdm(
-            enumerate(dataloader_iter, start=start_step),
-            desc=f"Epoch {epoch}",
-            disable=not coordinator.is_master(),
-            initial=start_step,
-            total=num_steps_per_epoch,
-        ) as pbar:
-            for step, batch in pbar:
-                if cfg.random_dataset:
-                    batch.pop("video").to(device, dtype)  # [B, C, T, H, W] 
-                    y = batch.pop("text")
-                    x = torch.randn(1, 3, 16, 256, 256, dtype=dtype).to(device)  # (B, C, T, H, W) 
-                    # y = list(str(s.simple_sentence()))
-    
-                else:
-                    x = batch.pop("video").to(device, dtype)  # [B, C, T, H, W] 
-                    y = batch.pop("text")
+    for epoch in range(0, cfg.epochs):
+        for step in range(10):
+            x = torch.randn(1, 3, 16, 256, 256, dtype=dtype).to(device)  # (B, C, T, H, W) 
+            x.requires_grad = True
+            y = [s.simple_sentence()]
+            with torch.no_grad():
+                # Prepare visual inputs
+                x = vae.encode(x)  # [B, C, T, H/P, W/P]
+                # Prepare text inputs
+                model_args = text_encoder.encode(y)
                 
-                # Visual and text encoding
-                with torch.no_grad():
-                    # Prepare visual inputs
-                    x = vae.encode(x)  # [B, C, T, H/P, W/P]
-                    # Prepare text inputs
-                    model_args = text_encoder.encode(y)
-                # Mask
-                if cfg.mask_ratios is not None:
-                    mask = mask_generator.get_masks(x)
-                    model_args["x_mask"] = mask
-                else:
-                    mask = None
-                
-                # Video info
-                for k, v in batch.items():
-                    model_args[k] = v.to(device, dtype)
-                    
-                # if cfg.random_dataset:
-                #     model_args['mask'] = torch.randn(1, 120, dtype=dtype).to(device)  # [B, N_token]
-
-                # Diffusion
-                t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
+            mask = None
+            t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
             
-                loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
-                # Backward & update
-                loss = loss_dict["loss"].mean()
-                logger.info(f"loss\n {loss}")
-                booster.backward(loss=loss, optimizer=optimizer)
-                print("booster bwd pass")
-                optimizer.step()
-                optimizer.zero_grad()
-                print("optim step pass")
-                
-                # # Diffusion without booster
-                # t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
-                # print(f"x {x.shape}\n t {t}\n model_args {model_args}\n mask {mask}\n")
-                # loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
-                # output = model(x=x, timestep=t, y=model_args['y'], mask=model_args['mask'])
-                # print("Diffusion get loss pass")
-                # print("Memory_reserved after Diffusion: %fGB"%(torch.musa.memory_reserved()/1024/1024/1024))
-                # # Backward & update
-                # loss = output.mean()
-                # print(f"loss\n {loss}")
-                # print("Memory_reserved after Diffusion: %fGB"%(torch.musa.memory_reserved()/1024/1024/1024))
-                # # booster.backward(loss=loss, optimizer=optimizer)
-                # loss.backward()
-                # print("booster bwd pass")
-                # optimizer.step()
-                # optimizer.zero_grad()
-                # print("optim step pass")
-                
-                # Update EMA
-                update_ema(ema, model.module, optimizer=optimizer)
-                print("optim step pass")
-
-                # Log loss values:
-                all_reduce_mean(loss)
-                running_loss += loss.item()
-                global_step = epoch * num_steps_per_epoch + step
-                log_step += 1
-                acc_step += 1
-
-                # Log to tensorboard
-                if coordinator.is_master() and (global_step + 1) % cfg.log_every == 0:
-                    avg_loss = running_loss / log_step
-                    pbar.set_postfix({"loss": avg_loss, "step": step, "global_step": global_step})
-                    running_loss = 0
-                    log_step = 0
-                    writer.add_scalar("loss", loss.item(), global_step)
-                    if cfg.wandb:
-                        wandb.log(
-                            {
-                                "iter": global_step,
-                                "epoch": epoch,
-                                "loss": loss.item(),
-                                "avg_loss": avg_loss,
-                                "acc_step": acc_step,
-                            },
-                            step=global_step,
-                        )
-
-                # Save checkpoint
-                if cfg.ckpt_every > 0 and (global_step + 1) % cfg.ckpt_every == 0:
-                    save(
-                        booster,
-                        model,
-                        ema,
-                        optimizer,
-                        lr_scheduler,
-                        epoch,
-                        step + 1,
-                        global_step + 1,
-                        cfg.batch_size,
-                        coordinator,
-                        exp_dir,
-                        ema_shape_dict,
-                        sampler=sampler_to_io,
-                    )
-                    logger.info(
-                        f"Saved checkpoint at epoch {epoch} step {step + 1} global_step {global_step + 1} to {exp_dir}"
-                    )
-
-        # the continue epochs are not resumed, so we need to reset the sampler start index and start step
-        if cfg.dataset.type == "VideoTextDataset":
-            dataloader.sampler.set_start_index(0)
-        if cfg.dataset.type == "VariableVideoTextDataset":
-            dataloader.batch_sampler.set_epoch(epoch + 1)
-            print("Epoch done, recomputing batch sampler")
-        start_step = 0
+            loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
+            # Backward & update
+            loss = loss_dict["loss"].mean()
+            logger.info(f"loss\n {loss}")
+            # booster.backward(loss=loss, optimizer=optimizer)
+            loss.backward()
+            print("booster bwd pass")
+            optimizer.step()
+            optimizer.zero_grad()
+            print("optim step pass")
+            
     print("training loop pass")
 
 if __name__ == "__main__":

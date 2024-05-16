@@ -64,8 +64,13 @@ log_every = 10
 ckpt_every = 1000
 load = None
 
+epochs = 10
+log_every = 10
+ckpt_every = 100
+load = None
+
 batch_size = 1
 lr = 2e-5
 grad_clip = 1.0
 
-random_dataset = True
+random_dataset = False
