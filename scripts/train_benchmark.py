@@ -4,6 +4,7 @@ from pprint import pprint
 
 import torch
 import torch.distributed as dist
+from colossalai.booster.plugin import TorchDDPPlugin, TorchFSDPPlugin
 import wandb
 from colossalai.booster import Booster
 from colossalai.booster.plugin import LowLevelZeroPlugin
@@ -90,6 +91,10 @@ def main():
         )
         set_sequence_parallel_group(plugin.sp_group)
         set_data_parallel_group(plugin.dp_group)
+    elif cfg.plugin == "torch-ddp":
+        plugin = TorchDDPPlugin()
+    elif cfg.plugin == "torch-fsdp":
+        plugin = TorchFSDPPlugin
     else:
         raise ValueError(f"Unknown plugin {cfg.plugin}")
     booster = Booster(plugin=plugin)
@@ -290,7 +295,7 @@ def main():
                 optimizer.zero_grad()
 
                 # Update EMA
-                update_ema(ema, model.module, optimizer=optimizer)
+                # update_ema(ema, model.module, optimizer=optimizer)
 
                 # Log loss values:
                 all_reduce_mean(loss)
