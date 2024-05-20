@@ -5,6 +5,7 @@ import warnings
 from datetime import timedelta
 
 import torch
+import torch_musa
 import torch.distributed as dist
 from colossalai.cluster import DistCoordinator, ProcessGroupMesh
 from colossalai.shardformer import ShardConfig, ShardFormer
@@ -61,8 +62,10 @@ def main(args):
     # 1. init environment
     # ======================================================
     # we set a very large timeout to avoid some processes exit early
-    dist.init_process_group(backend="nccl", timeout=timedelta(hours=24))
-    torch.cuda.set_device(dist.get_rank() % torch.cuda.device_count())
+    # dist.init_process_group(backend="nccl", timeout=timedelta(hours=24))
+    dist.init_process_group(backend="mccl", timeout=timedelta(hours=24))
+    # torch.cuda.set_device(dist.get_rank() % torch.cuda.device_count())
+    torch.musa.set_device(dist.get_rank() % torch.musa.device_count())
     set_seed(1024)
     coordinator = DistCoordinator()
 
@@ -86,7 +89,7 @@ def main(args):
             model_name=get_model_name_from_path(model_path),
             device=get_current_device(),
             torch_dtype=torch.float16,
-            attn_implementation="flash_attention_2" if args.flash_attention else "eager",
+            # attn_implementation="flash_attention_2" if args.flash_attention else "eager",
         )
         dist.barrier()
 
@@ -104,12 +107,15 @@ def main(args):
     model_name = model.__class__.__name__
     print(model_name)
     if model_name == "LlavaLlamaForCausalLM":
-        model = shard_former.optimize(model, policy=LlavaLlamaForCausalLMPolicy())[0].cuda()
+        # model = shard_former.optimize(model, policy=LlavaLlamaForCausalLMPolicy())[0].cuda()
+        model = shard_former.optimize(model, policy=LlavaLlamaForCausalLMPolicy())[0].musa()
     elif model_name == "LlavaMistralForCausalLM":
-        model = shard_former.optimize(model, policy=LlavaMistralForCausalLMPolicy())[0].cuda()
+        # model = shard_former.optimize(model, policy=LlavaMistralForCausalLMPolicy())[0].cuda()
+        model = shard_former.optimize(model, policy=LlavaLlamaForCausalLMPolicy())[0].musa()
     else:
         print(f"The shardformer policy for {model_name} is not implemented, skip")
-    torch.cuda.empty_cache()
+    # torch.cuda.empty_cache()
+    torch.musa.empty_cache()
 
     # ======================================================
     # 4. Prepare dataloader
@@ -224,7 +230,8 @@ def main(args):
     for i, batch in enumerate(pbar):
         # measure time
         if args.profile:
-            torch.cuda.synchronize()
+            # torch.cuda.synchronize()
+            torch.musa.synchronize()
             start_time = time.time()
 
         video_files, frames, video_lengths, img_size_list, texts = batch
@@ -233,8 +240,10 @@ def main(args):
         with Timer() as encode_timer:
             samples = []
             for imgs, imgs_size, input_ids in zip(frames, img_size_list, texts):
-                imgs = imgs.cuda()
-                input_ids = input_ids.cuda()
+                # imgs = imgs.cuda()
+                # input_ids = input_ids.cuda()
+                imgs = imgs.musa()
+                input_ids = input_ids.musa()
                 _, _, _, _, inputs_embeds, _ = model.prepare_inputs_labels_for_multimodal(
                     input_ids, None, None, None, None, images=imgs, image_sizes=imgs_size
                 )
@@ -281,7 +290,8 @@ def main(args):
         # skip warmup and add profiling data
         if args.profile and i >= args.profile_warmup:
             # measure time
-            torch.cuda.synchronize()
+            # torch.cuda.synchronize()
+            torch.musa.synchronize()
             time_taken = time.time() - start_time
 
             total_time.append(time_taken)
@@ -302,8 +312,10 @@ def main(args):
         print(f"average encode time per sample: {sum(encode_time) / num_samples_after_warmup}")
         print(f"average generate time per sample: {sum(generate_time) / num_samples_after_warmup}")
         print(f"average number of tokens characters per sample: {sum(output_length) / num_samples_after_warmup}")
-        print(f"Max GPU allocated / GB: {torch.cuda.max_memory_allocated() / 1024**3}")
-        print(f"Max GPU reserved / GB: {torch.cuda.max_memory_reserved() / 1024**3}")
+        # print(f"Max GPU allocated / GB: {torch.cuda.max_memory_allocated() / 1024**3}")
+        # print(f"Max GPU reserved / GB: {torch.cuda.max_memory_reserved() / 1024**3}")
+        print(f"Max GPU allocated / GB: {torch.musa.max_memory_allocated() / 1024**3}")
+        print(f"Max GPU reserved / GB: {torch.musa.max_memory_reserved() / 1024**3}")
 
     # ======================================================
     # 6. shutdown

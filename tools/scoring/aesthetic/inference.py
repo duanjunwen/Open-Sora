@@ -6,6 +6,7 @@ import clip
 import numpy as np
 import pandas as pd
 import torch
+import torch_musa
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
@@ -83,9 +84,9 @@ class MLP(nn.Module):
 class AestheticScorer(nn.Module):
     def __init__(self, input_size, device):
         super().__init__()
-        self.mlp = MLP(input_size)
+        self.mlp = MLP(input_size).to(device=device)
         # self.mlp.load_state_dict(torch.load("pretrained_models/aesthetic.pth"))
-        self.mlp.load_state_dict(torch.load("pretrained_models/aesthetic-model.pth"))
+        self.mlp.load_state_dict(torch.load("./pretrained_models/aesthetic/aesthetic-model.pth", map_location=device))
         self.clip, self.preprocess = clip.load("ViT-L/14", device=device)
 
         self.eval()
@@ -99,8 +100,10 @@ class AestheticScorer(nn.Module):
 
 @torch.inference_mode()
 def main(args):
-    dist.init_process_group(backend="nccl", timeout=timedelta(hours=24))
-    torch.cuda.set_device(dist.get_rank() % torch.cuda.device_count())
+    # dist.init_process_group(backend="nccl", timeout=timedelta(hours=24))
+    dist.init_process_group(backend="mccl", timeout=timedelta(hours=24))
+    # torch.cuda.set_device(dist.get_rank() % torch.cuda.device_count())
+    torch.musa.set_device(dist.get_rank() % torch.musa.device_count())
     set_seed(1024)
     rank = dist.get_rank()
     world_size = dist.get_world_size()
@@ -108,8 +111,13 @@ def main(args):
     output_file = args.input.replace(".csv", f"_aes_part{rank}.csv")
 
     # build model
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = AestheticScorer(768, device)
+    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "musa" if torch.musa.is_available() else "cpu"
+
+    
+    # model = AestheticScorer(768, device)
+    model = AestheticScorer(768, "cpu")
+    model = model.to(device)
     preprocess = model.preprocess
 
     # build dataset
@@ -164,6 +172,7 @@ if __name__ == "__main__":
     parser.add_argument("--accumulate", type=int, default=1, help="batch to accumulate")
     parser.add_argument("--prefetch_factor", type=int, default=2, help="Prefetch factor")
     parser.add_argument("--num_frames", type=int, default=3, help="Number of frames to extract")
+    parser.add_argument("--local-rank", type=int, default=0, help="Local Rank")
     args = parser.parse_args()
 
     main(args)
