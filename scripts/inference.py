@@ -26,7 +26,7 @@ def main():
     if os.environ.get("WORLD_SIZE", None):
         use_dist = True
         # colossalai.launch_from_torch({})
-        colossalai.launch({})
+        colossalai.launch({},rank=0, world_size=1, host='localhost',port=31806,backend='mccl')
         coordinator = DistCoordinator()
 
         if coordinator.world_size > 1:
@@ -42,8 +42,8 @@ def main():
     # 2. runtime variables
     # ======================================================
     torch.set_grad_enabled(False)
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+    # torch.backends.cuda.matmul.allow_tf32 = True
+    # torch.backends.cudnn.allow_tf32 = True
     # device = "cuda" if torch.cuda.is_available() else "cpu"
     device = "musa" if torch.musa.is_available() else "cpu"
     dtype = to_torch_dtype(cfg.dtype)

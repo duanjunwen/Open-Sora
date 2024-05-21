@@ -9,7 +9,8 @@ model = dict(
     time_scale=1.0,
     enable_flashattn=True,
     enable_layernorm_kernel=True,
-    from_pretrained="PRETRAINED_MODEL",
+    # from_pretrained="PRETRAINED_MODEL",
+    from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth",
 )
 vae = dict(
     type="VideoAutoencoderKL",
@@ -29,7 +30,9 @@ scheduler = dict(
     cfg_scale=7.0,
     cfg_channel=3,  # or None
 )
-dtype = "bf16"
+# dtype = "bf16"
+dtype = "fp16"
+# dtype = "fp32"
 
 # Condition
 prompt_path = "./assets/texts/t2v_samples.txt"
