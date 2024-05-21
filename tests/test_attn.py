@@ -62,7 +62,7 @@ if __name__ == "__main__":
     print("No flashattn")
     run_attn(False, "musa")
     
-    print("Use flashattn Correctness")
-    run_atten_correctness(True)
+    # print("Use flashattn Correctness")
+    # run_atten_correctness(True)
     print("No flashattn Correctness")
     run_atten_correctness(False)

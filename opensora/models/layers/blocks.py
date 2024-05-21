@@ -131,7 +131,6 @@ class PatchEmbed3D(nn.Module):
             x = x.flatten(2).transpose(1, 2)  # BCTHW -> BNC
         return x
 
-
 class Attention(nn.Module):
     def __init__(
         self,
@@ -409,13 +408,12 @@ class FinalLayer(nn.Module):
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.linear = nn.Linear(hidden_size, num_patch * out_channels, bias=True)
         self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True))
-
+                  
     def forward(self, x, c):
         shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
         x = modulate(self.norm_final, x, shift, scale)
         x = self.linear(x)
         return x
-
 
 class T2IFinalLayer(nn.Module):
     """
@@ -474,7 +472,7 @@ class TimestepEmbedder(nn.Module):
             nn.Linear(hidden_size, hidden_size, bias=True),
         )
         self.frequency_embedding_size = frequency_embedding_size
-
+        
     @staticmethod
     def timestep_embedding(t, dim, max_period=10000):
         """
@@ -501,7 +499,7 @@ class TimestepEmbedder(nn.Module):
             t_freq = t_freq.to(dtype)
         t_emb = self.mlp(t_freq)
         return t_emb
-
+    
 
 class LabelEmbedder(nn.Module):
     """
@@ -596,7 +594,7 @@ class CaptionEmbedder(nn.Module):
             torch.randn(token_num, in_channels) / in_channels**0.5,
         )
         self.uncond_prob = uncond_prob
-
+        
     def token_drop(self, caption, force_drop_ids=None):
         """
         Drops labels to enable classifier-free guidance.
@@ -617,7 +615,7 @@ class CaptionEmbedder(nn.Module):
             caption = self.token_drop(caption, force_drop_ids)
         caption = self.y_proj(caption)
         return caption
-
+    
 
 class PositionEmbedding2D(nn.Module):
     def __init__(self, dim: int) -> None:

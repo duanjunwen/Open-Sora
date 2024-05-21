@@ -10,6 +10,7 @@ from colossalai.booster import Booster
 from colossalai.booster.plugin import LowLevelZeroPlugin
 from colossalai.cluster import DistCoordinator
 from colossalai.nn.optimizer import HybridAdam
+from torch.optim import Adam
 from colossalai.utils import get_current_device, set_seed
 from tqdm import tqdm
 from wonderwords import RandomWord, RandomSentence
@@ -32,6 +33,33 @@ from opensora.utils.config_utils import (
 )
 from opensora.utils.misc import all_reduce_mean, format_numel_str, get_model_numel, requires_grad, to_torch_dtype
 from opensora.utils.train_utils import MaskGenerator, update_ema
+
+
+def register_hooks(module):
+    def bwd_hook(module, grad_input, grad_output):
+        torch.musa.synchronize()
+        # pass
+        # print(f"{module._name} post hook\n")
+        # print(f"Grad input {grad_input} type: {type(grad_input)}; len: {len(grad_input)}; shape {grad_input[0].shape}\n")
+        # print(f"Grad output {grad_output} type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
+        
+        # print(f"Grad input type: {type(grad_input)}; len: {len(grad_input)}; shape {grad_input[0].shape}\n")
+        # print(f"Grad output type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
+
+    
+    
+    def bwd_pre_hook(module, grad_output):
+        # torch.musa.synchronize()
+        pass
+        # print(f"{module._name} pre hook\n")
+        # print(f"Grad output {grad_output} type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
+        
+        # print(f"Grad output type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
+
+    
+    module.register_backward_hook(bwd_hook)
+    module.register_full_backward_pre_hook(bwd_pre_hook)
+    
 
 
 def main():
@@ -165,6 +193,7 @@ def main():
         weight_decay=0,
         adamw_mode=True,
     )
+    
     lr_scheduler = None
 
     # 4.6. prepare for training
@@ -221,6 +250,10 @@ def main():
     # generator random sentence for y
     s = RandomSentence()
     # 6.2. training loop
+    for name, module in model.named_modules(prefix="stdit"):
+        module._name = name
+    
+    model.apply(register_hooks)
     for epoch in range(start_epoch, cfg.epochs):
         if cfg.dataset.type == "VideoTextDataset":
             dataloader.sampler.set_epoch(epoch)
@@ -240,7 +273,6 @@ def main():
                     y = batch.pop("text")
                     x = torch.randn(1, 3, 16, 256, 256, dtype=dtype).to(device)  # (B, C, T, H, W) 
                     # y = list(str(s.simple_sentence()))
-    
                 else:
                     x = batch.pop("video").to(device, dtype)  # [B, C, T, H, W] 
                     y = batch.pop("text")
@@ -262,8 +294,8 @@ def main():
                 for k, v in batch.items():
                     model_args[k] = v.to(device, dtype)
                     
-                # if cfg.random_dataset:
-                #     model_args['mask'] = torch.randn(1, 120, dtype=dtype).to(device)  # [B, N_token]
+                if cfg.random_dataset:
+                    model_args['mask'] = torch.randn(1, 120, dtype=dtype).to(device)  # [B, N_token]
 
                 # Diffusion
                 t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
@@ -271,35 +303,28 @@ def main():
                 loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
                 # Backward & update
                 loss = loss_dict["loss"].mean()
-                logger.info(f"loss\n {loss}")
+                logger.info(f"loss: {loss}\n")
                 booster.backward(loss=loss, optimizer=optimizer)
-                print("booster bwd pass")
                 optimizer.step()
                 optimizer.zero_grad()
-                print("optim step pass")
                 
                 # # Diffusion without booster
                 # t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
-                # print(f"x {x.shape}\n t {t}\n model_args {model_args}\n mask {mask}\n")
                 # loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
-                # output = model(x=x, timestep=t, y=model_args['y'], mask=model_args['mask'])
-                # print("Diffusion get loss pass")
-                # print("Memory_reserved after Diffusion: %fGB"%(torch.musa.memory_reserved()/1024/1024/1024))
+                # # output = model(x=x, timestep=t, y=model_args['y'], mask=model_args['mask'])
                 # # Backward & update
-                # loss = output.mean()
+                # loss = loss_dict['loss'].mean()
                 # print(f"loss\n {loss}")
-                # print("Memory_reserved after Diffusion: %fGB"%(torch.musa.memory_reserved()/1024/1024/1024))
                 # # booster.backward(loss=loss, optimizer=optimizer)
                 # loss.backward()
-                # print("booster bwd pass")
-                # optimizer.step()
-                # optimizer.zero_grad()
-                # print("optim step pass")
+                # # print("booster bwd pass")
+                # # optimizer.step()
+                # # optimizer.zero_grad()
+                # # print("optim step pass")
                 
                 # Update EMA
                 update_ema(ema, model.module, optimizer=optimizer)
-                print("optim step pass")
-
+                
                 # Log loss values:
                 all_reduce_mean(loss)
                 running_loss += loss.item()

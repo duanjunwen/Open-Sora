@@ -8,6 +8,8 @@ import torch.distributed as dist
 import wandb
 from colossalai.booster import Booster
 from colossalai.booster.plugin import LowLevelZeroPlugin
+# from colossalai.booster.plugin import TorchDDPPlugin
+# from colossalai.booster.plugin import TorchFSDPPlugin
 from colossalai.cluster import DistCoordinator
 from colossalai.nn.optimizer import HybridAdam
 from colossalai.utils import get_current_device, set_seed
@@ -34,6 +36,28 @@ from opensora.utils.config_utils import (
 )
 from opensora.utils.misc import all_reduce_mean, format_numel_str, get_model_numel, requires_grad, to_torch_dtype
 from opensora.utils.train_utils import MaskGenerator, update_ema
+
+
+def register_hooks(module):
+    def bwd_hook(module, grad_input, grad_output):
+        torch.musa.synchronize()
+        # pass
+        # print(f"{module._name} post hook\n")
+        # print(f"Grad input {grad_input} type: {type(grad_input)}; len: {len(grad_input)}; shape {grad_input[0].shape}\n")
+        # print(f"Grad output {grad_output} type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
+        
+        # print(f"Grad input type: {type(grad_input)}; len: {len(grad_input)}; shape {grad_input[0].shape}\n")
+        # print(f"Grad output type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
+
+    def bwd_pre_hook(module, grad_output):
+        torch.musa.synchronize()
+        # print(f"{module._name} pre hook\n")
+        # print(f"Grad output {grad_output} type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
+        
+        # print(f"Grad output type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
+    
+    module.register_backward_hook(bwd_hook)
+    module.register_full_backward_pre_hook(bwd_pre_hook)
 
 
 def main():
@@ -94,6 +118,12 @@ def main():
         )
         set_sequence_parallel_group(plugin.sp_group)
         set_data_parallel_group(plugin.dp_group)
+    elif cfg.plugin == "fsdp":
+        plugin = TorchFSDPPlugin()
+        set_data_parallel_group(dist.group.WORLD)
+    elif cfg.plugin == "ddp":
+        plugin = TorchDDPPlugin()
+        set_data_parallel_group(dist.group.WORLD)
     else:
         raise ValueError(f"Unknown plugin {cfg.plugin}")
     booster = Booster(plugin=plugin)
@@ -220,6 +250,7 @@ def main():
     # =======================================================
     # 6. training loop
     # =======================================================
+
     start_epoch = start_step = log_step = sampler_start_idx = acc_step = 0
     running_loss = 0.0
     sampler_to_io = dataloader.batch_sampler if cfg.dataset.type == "VariableVideoTextDataset" else None
@@ -246,6 +277,10 @@ def main():
     # 6.2. training loop
     performance_evaluator = Evaluator(weight_memory=model_numel)
     performance_evaluator.on_fit_start()
+    for name, module in model.named_modules(prefix="stdit"):
+        module._name = name
+    
+    model.apply(register_hooks)
     for epoch in range(start_epoch, cfg.epochs):
         if cfg.dataset.type == "VideoTextDataset":
             dataloader.sampler.set_epoch(epoch)
@@ -283,43 +318,35 @@ def main():
 
                 # Diffusion
                 t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
-                
-                
                 performance_evaluator.before_forward()
                 loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
                 # Backward & update
                 loss = loss_dict["loss"].mean()
-                print(f"loss\n {loss}")
+                logger.info(f"loss: {loss}\n")
                 performance_evaluator.before_backward()
                 booster.backward(loss=loss, optimizer=optimizer)
-                print("booster bwd pass")
                 performance_evaluator.before_optimizer_update()
                 optimizer.step()
                 optimizer.zero_grad()
-                print("optim step pass")
                 
                 # # Diffusion without booster
                 # t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
-                # print(f"x {x.shape}\n t {t}\n model_args {model_args}\n mask {mask}\n")
+                # performance_evaluator.before_forward()
                 # loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
-                # output = model(x=x, timestep=t, y=model_args['y'], mask=model_args['mask'])
-                # print("Diffusion get loss pass")
-                # print("Memory_reserved after Diffusion: %fGB"%(torch.musa.memory_reserved()/1024/1024/1024))
+                # # output = model(x=x, timestep=t, y=model_args['y'], mask=model_args['mask'])
                 # # Backward & update
-                # loss = output.mean()
-                # print(f"loss\n {loss}")
-                # print("Memory_reserved after Diffusion: %fGB"%(torch.musa.memory_reserved()/1024/1024/1024))
+                # loss = loss_dict['loss'].mean()
                 # # booster.backward(loss=loss, optimizer=optimizer)
+                # performance_evaluator.before_backward()
                 # loss.backward()
-                # print("booster bwd pass")
+                # performance_evaluator.before_optimizer_update()
                 # optimizer.step()
                 # optimizer.zero_grad()
-                # print("optim step pass")
+                # # print("optim step pass")
                 
                 # Update EMA
                 update_ema(ema, model.module, optimizer=optimizer)
-                print("optim step pass")
-
+                
                 # Log loss values:
                 all_reduce_mean(loss)
                 running_loss += loss.item()

@@ -14,6 +14,8 @@ dtype = "fp16"
 # dtype = "fp32"
 grad_checkpoint = True
 plugin = "zero2"
+# plugin = "fsdp"
+# plugin = "ddp"
 sp_size = 1
 
 # Define model
@@ -59,10 +61,10 @@ seed = 42
 outputs = "outputs"
 wandb = False
 
-epochs = 1000
-log_every = 10
-ckpt_every = 1000
-load = None
+# epochs = 1000
+# log_every = 10
+# ckpt_every = 1000
+# load = None
 
 epochs = 10
 log_every = 10
