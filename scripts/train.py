@@ -81,7 +81,6 @@ def main():
     # we set a very large timeout to avoid some processes exit early
     # dist.init_process_group(backend="nccl", timeout=timedelta(hours=24))
     dist.init_process_group(backend="mccl", timeout=timedelta(hours=24))
-    # torch.cuda.set_device(dist.get_rank() % torch.cuda.device_count())
     torch.musa.set_device(dist.get_rank() % torch.musa.device_count())
     set_seed(1024)
     coordinator = DistCoordinator()
@@ -303,7 +302,7 @@ def main():
                 loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
                 # Backward & update
                 loss = loss_dict["loss"].mean()
-                logger.info(f"loss: {loss}\n")
+                logger.info(f"loss\n {loss}")
                 booster.backward(loss=loss, optimizer=optimizer)
                 optimizer.step()
                 optimizer.zero_grad()

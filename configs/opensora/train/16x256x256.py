@@ -9,13 +9,9 @@ dataset = dict(
 
 # Define acceleration
 num_workers = 4
-# dtype = "bf16"
 dtype = "fp16"
-# dtype = "fp32"
 grad_checkpoint = True
 plugin = "zero2"
-# plugin = "fsdp"
-# plugin = "ddp"
 sp_size = 1
 
 # Define model
@@ -23,30 +19,17 @@ model = dict(
     type="STDiT-XL/2",
     space_scale=0.5,
     time_scale=1.0,
-    # from_pretrained="PixArt-XL-2-512x512.pth",
-    # from_pretrained="./pretrained_models/PixArt-alpha/PixArt-XL-2-512x512.pth",
     from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth",
     enable_flashattn=True,
     enable_layernorm_kernel=True,
 )
 
-# model = dict(
-#     type="STDiT2-XL/2",
-#     # from_pretrained="PixArt-XL-2-512x512.pth",
-#     # from_pretrained="./pretrained_models/PixArt-alpha/PixArt-XL-2-512x512.pth",
-#     from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth",
-#     enable_flashattn=True,
-#     enable_layernorm_kernel=True,
-# )
-
 vae = dict(
     type="VideoAutoencoderKL",
-    # from_pretrained="stabilityai/sd-vae-ft-ema",
     from_pretrained="./pretrained_models/stabilityai/sd-vae-ft-ema",
 )
 text_encoder = dict(
     type="t5",
-    # from_pretrained="DeepFloyd/t5-v1_1-xxl",
     from_pretrained="./pretrained_models/t5_ckpts/t5-v1_1-xxl",
     model_max_length=120,
     shardformer=True,
@@ -60,11 +43,6 @@ scheduler = dict(
 seed = 42
 outputs = "outputs"
 wandb = False
-
-# epochs = 1000
-# log_every = 10
-# ckpt_every = 1000
-# load = None
 
 epochs = 10
 log_every = 10
