@@ -12,6 +12,8 @@ num_workers = 4
 dtype = "fp16"
 grad_checkpoint = True
 plugin = "zero2"
+# plugin = "zero2-seq"
+# plugin = "ddp"
 sp_size = 1
 
 # Define model

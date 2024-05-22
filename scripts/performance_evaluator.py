@@ -42,6 +42,8 @@ class Timer:
         self.state = "before_iter"
         self.torch_profiler_duration: float = 0.0
         self.data_load_duration: float = 0.0
+        self.video_encode_duration: float = 0.0
+        self.text_encode_duration: float = 0.0
         self.forward_duration: float = 0.0
         self.backward_duration: float = 0.0
         self.forward_backward_duration: float = 0.0 # Only used when pp is enabled.
@@ -54,14 +56,36 @@ class Timer:
         assert self.state == "before_iter"
         self.start_time = time()
         self.last_time_checkpoint = self.start_time
-
-    def before_forward(self, torch_profiler_duration: float) -> None:
+        
+    def before_video_encode(self, torch_profiler_duration):
         assert self.state == "before_iter"
-        self.state = "before_forward"
+        self.state = "before_video_encode"
         self.torch_profiler_duration = torch_profiler_duration # The time of torch.profiler.step() shouldn't be considered
 
         current_time = time()
         self.data_load_duration += current_time - self.last_time_checkpoint - self.torch_profiler_duration
+        self.last_time_checkpoint = current_time
+    
+    def before_text_encode(self,):
+        assert self.state == "before_video_encode"
+        self.state = "before_text_encode"
+        
+        current_time = time()
+        self.video_encode_duration += current_time - self.last_time_checkpoint
+        self.last_time_checkpoint = current_time
+
+    def before_forward(self, torch_profiler_duration: float) -> None:
+        # assert self.state == "before_iter"
+        # self.state = "before_forward"
+        # self.torch_profiler_duration = torch_profiler_duration # The time of torch.profiler.step() shouldn't be considered
+
+        # current_time = time()
+        # self.data_load_duration += current_time - self.last_time_checkpoint - self.torch_profiler_duration
+        # self.last_time_checkpoint = current_time
+        assert self.state == "before_text_encode"
+        self.state = "before_forward"
+        current_time = time()
+        self.text_encode_duration += current_time - self.last_time_checkpoint
         self.last_time_checkpoint = current_time
 
     def before_backward(self) -> None:
@@ -112,6 +136,8 @@ class Timer:
         self.data_load_duration = 0.0
         self.forward_duration = 0.0
         self.backward_duration = 0.0
+        self.video_encode_duration = 0.0
+        self.text_encode_duration = 0.0
         self.forward_backward_duration = 0.0
         self.optimizer_udpate_duration = 0.0
         self.iter_duration = 0.0
@@ -200,8 +226,6 @@ class PerformanceEvaluator:
         self.optim_init_memory = torch.musa.memory_allocated() - self.weight_memory
         # HACK: we assume that the memory occupied by gradients is the same as the memory occupied by weights
         # self.grad_memory = self.weight_memory
-        # self.coordinator.print_on_master(f"Allocated CUDA memory before training: {torch.cuda.memory_allocated()/1024**3:.3f} GB")
-        # self.coordinator.print_on_master(f"Peak CUDA memory before training: {torch.cuda.max_memory_allocated()/1024**3:.3f} GB")
         self.coordinator.print_on_master(f"Allocated CUDA memory before training: {torch.musa.memory_allocated()/1024**3:.3f} GB")
         self.coordinator.print_on_master(f"Peak CUDA memory before training: {torch.musa.max_memory_allocated()/1024**3:.3f} GB")
         self.coordinator.print_on_master(
@@ -232,15 +256,27 @@ class PerformanceEvaluator:
         self.skip_record = (self.ignore_steps > 0 and self.step_cnt < self.ignore_steps)
         if self.skip_record:
             return
-        # torch.cuda.synchronize()
         torch.musa.synchronize()
         self.timer.start()
+        
+    def before_video_encode(self) -> None:
+        if self.skip_record:
+            return
+        if not self.disable_internal_sync:
+            torch.musa.synchronize()
+        self.timer.before_video_encode(torch_profiler_duration=0)
+    
+    def before_text_encode(self) -> None:
+        if self.skip_record:
+            return
+        if not self.disable_internal_sync:
+            torch.musa.synchronize()
+        self.timer.before_text_encode()
 
     def before_forward(self) -> None:
         if self.skip_record:
             return
         if not self.disable_internal_sync:
-            # torch.cuda.synchronize()
             torch.musa.synchronize()
         self.timer.before_forward(torch_profiler_duration=0)
 
@@ -249,7 +285,6 @@ class PerformanceEvaluator:
         if self.skip_record:
             return
         if not self.disable_internal_sync:
-            # torch.cuda.synchronize()
             torch.musa.synchronize()
         self.timer.before_backward()
 
@@ -257,7 +292,6 @@ class PerformanceEvaluator:
         if self.skip_record:
             return
         if not self.disable_internal_sync:
-            # torch.cuda.synchronize()
             torch.musa.synchronize()
         self.timer.before_optimizer_update()
         self.optimizer_update_cnt += 1
@@ -267,8 +301,6 @@ class PerformanceEvaluator:
         self.coordinator.print_on_master(
             f"\n"
             f"Step: {self.step_cnt - 1}, Is warming up: {self.skip_record}, "
-            # f"Peak Memory: {torch.cuda.max_memory_allocated()/1024**3:.3f} GB, "
-            # f"Allocated Memory: {torch.cuda.memory_allocated()/1024**3:.3f} GB, "
             f"Peak Memory: {torch.musa.max_memory_allocated()/1024**3:.3f} GB, "
             f"Allocated Memory: {torch.musa.memory_allocated()/1024**3:.3f} GB, "
             f"CPU Memory: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024**2:.3f} GB"
@@ -306,7 +338,6 @@ class PerformanceEvaluator:
             self.torch_profiler.stop()
 
         with open(f"memory_{dist.get_rank()}.log", "w") as f:
-            # f.write(torch.cuda.memory_summary(device=torch.cuda.current_device()))
             f.write(torch.musa.memory_summary(device=torch.musa.current_device()))
 
         if dist.get_rank() != 0:
@@ -334,6 +365,8 @@ class PerformanceEvaluator:
         # Time Breakdown Stats
         data_load_duration = all_reduce_mean(self.timer.data_load_duration, self.coordinator.world_size)
         if self.pp_size == 1:
+            video_encode_duration = all_reduce_mean(self.timer.video_encode_duration, self.coordinator.world_size)
+            text_encode_duration = all_reduce_mean(self.timer.text_encode_duration, self.coordinator.world_size)
             forward_duration = all_reduce_mean(self.timer.forward_duration, self.coordinator.world_size)
             backward_duration = all_reduce_mean(self.timer.backward_duration, self.coordinator.world_size)
         else:
@@ -343,6 +376,8 @@ class PerformanceEvaluator:
         time_usage_log = f"Time Usage Breakdown: "
         time_usage_log += f"Avg Dataload Latency: {1000 * data_load_duration / num_record_steps:.2f} ms, "
         if self.pp_size == 1:
+            time_usage_log += f"Avg Video Encode Latency: {1000 * video_encode_duration / num_record_steps:.2f} ms, "
+            time_usage_log += f"Avg Text Encode Latency: {1000 * text_encode_duration / num_record_steps:.2f} ms, "
             time_usage_log += f"Avg Forward Latency: {1000 * forward_duration / num_record_steps:.2f} ms, "
             time_usage_log += f"Avg Backward Latency: {1000 * backward_duration / num_record_steps:.2f} ms, "
         else:
@@ -351,12 +386,7 @@ class PerformanceEvaluator:
             time_usage_log += f"Avg Optimizer Update Latency: {1000 * optimizer_update_duration / self.optimizer_update_cnt:.2f} ms, "
         time_usage_log += f"Avg Step Latency: {1000 * avg_latency:.2f} ms\n"
         self.coordinator.print_on_master(time_usage_log)
-
-        # Memory Breakdown Stats
-        # peak_memory = torch.cuda.max_memory_allocated()
-        # torch.cuda.empty_cache()
-        # memory_fragmentation = torch.cuda.max_memory_reserved() - peak_memory
-        # final_allocated_memory = torch.cuda.memory_allocated()
+        
         peak_memory = torch.musa.max_memory_allocated()
         torch.musa.empty_cache()
         memory_fragmentation = torch.musa.max_memory_reserved() - peak_memory
@@ -380,6 +410,5 @@ class PerformanceEvaluator:
         #     "Notice: Sometimes the weight and optimizer are initialized together (e.g. booster.boost/deepspeed.initialize), "
         #     "in such cases the calculated Weight memory is the sum of model weight memory and part of optimizer memory, please refer to other logs for model weight memory information."
         # )
-        # self.coordinator.print_on_master(torch.cuda.memory_summary(device=torch.cuda.current_device()))
         self.coordinator.print_on_master(torch.musa.memory_summary(device=torch.musa.current_device()))
 

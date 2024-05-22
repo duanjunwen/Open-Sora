@@ -1,8 +1,27 @@
 import math
 import random
 from collections import OrderedDict
-
+from colossalai.zero import LowLevelZeroOptimizer
 import torch
+import torch_musa
+import torch.distributed as dist
+from opensora.acceleration.parallel_states import get_data_parallel_group
+
+def _gather(input_, dim=-1, process_group=None):
+    # skip if only one rank involved
+    world_size = dist.get_world_size(process_group)
+    if world_size == 1:
+        return input_
+
+    # all gather
+    input_ = input_.contiguous()
+    tensor_list = [torch.empty_like(input_) for _ in range(world_size)]
+    torch.distributed.all_gather(tensor_list, input_, group=process_group)
+
+    # concat
+    output = torch.cat(tensor_list, dim=dim).contiguous()
+
+    return output
 
 
 @torch.no_grad()
@@ -25,11 +44,24 @@ def update_ema(
             ema_params[name].mul_(decay).add_(param_data, alpha=1 - decay)
         else:
             if param.data.dtype != torch.float32:
-                param_id = id(param)
-                master_param = optimizer._param_store.working_to_master_param[param_id]
-                param_data = master_param.data
+                # use zero plugin
+                if isinstance(optimizer, LowLevelZeroOptimizer):
+                    param_id = id(param)
+                    master_param = optimizer._param_store.working_to_master_param[param_id]
+                    param_data = master_param.data
+                # use other plugin (DDP, FSDP)
+                else:
+                    param_data = param.data
+                    # gather shard ema_params
+                    if name.startswith('module'):
+                        name = '.'.join(name.split('.')[1:])
+                    dp_group = get_data_parallel_group()
+                    ema_params[name] = _gather(input_=ema_params[name], dim=-1, process_group=dp_group)
+                    ema_params[name] = ema_params[name].view(param_data.shape)
             else:
                 param_data = param.data
+            if name.startswith('module'):
+                name = '.'.join(name.split('.')[1:])
             ema_params[name].mul_(decay).add_(param_data, alpha=1 - decay)
 
 

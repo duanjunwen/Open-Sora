@@ -9,6 +9,7 @@ import wandb
 from colossalai.booster import Booster
 from colossalai.booster.plugin import LowLevelZeroPlugin
 from colossalai.booster.plugin import TorchDDPPlugin
+from torch.nn.parallel import DistributedDataParallel as DDP
 from colossalai.booster.plugin import TorchFSDPPlugin
 from colossalai.cluster import DistCoordinator
 from colossalai.nn.optimizer import HybridAdam
@@ -126,7 +127,7 @@ def main():
         set_data_parallel_group(dist.group.WORLD)
     else:
         raise ValueError(f"Unknown plugin {cfg.plugin}")
-    booster = Booster(plugin=plugin)
+    booster = Booster()
 
     
     # ======================================================
@@ -192,18 +193,19 @@ def main():
     scheduler = build_module(cfg.scheduler, SCHEDULERS)
 
     # 4.5. setup optimizer
-    optimizer = HybridAdam(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=cfg.lr,
-        weight_decay=0,
-        adamw_mode=True,
-    )
-    
-    # optimizer = Adam(
+    # optimizer = HybridAdam(
     #     filter(lambda p: p.requires_grad, model.parameters()),
     #     lr=cfg.lr,
     #     weight_decay=0,
+    #     adamw_mode=True,
     # )
+    
+    optimizer = Adam(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=cfg.lr,
+        weight_decay=0,
+        eps=1e-3,
+    )
     
     lr_scheduler = None
 
@@ -242,12 +244,13 @@ def main():
     # 5. boost model for distributed training with colossalai
     # =======================================================
     torch.set_default_dtype(dtype)
-    model, optimizer, _, dataloader, lr_scheduler = booster.boost(
-        model=model,
-        optimizer=optimizer,
-        lr_scheduler=lr_scheduler,
-        dataloader=dataloader,
-    )
+    model = DDP(model)
+    # model, optimizer, _, dataloader, lr_scheduler = booster.boost(
+    #     model=model,
+    #     optimizer=optimizer,
+    #     lr_scheduler=lr_scheduler,
+    #     dataloader=dataloader,
+    # )
     torch.set_default_dtype(torch.float)
     logger.info("Boost model for distributed training")
     if cfg.dataset.type == "VariableVideoTextDataset":
@@ -314,7 +317,6 @@ def main():
                     # Prepare text inputs
                     performance_evaluator.before_text_encode()
                     model_args = text_encoder.encode(y)
-                    
                 # Mask
                 if cfg.mask_ratios is not None:
                     mask = mask_generator.get_masks(x)
@@ -334,25 +336,12 @@ def main():
                 loss = loss_dict["loss"].mean()
                 logger.info(f"loss: {loss}\n")
                 performance_evaluator.before_backward()
-                booster.backward(loss=loss, optimizer=optimizer)
+                # optimizer.backward(loss)
+                # booster.backward(loss=loss, optimizer=optimizer)
+                loss.backward()
                 performance_evaluator.before_optimizer_update()
                 optimizer.step()
                 optimizer.zero_grad()
-                
-                # # Diffusion without booster
-                # t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
-                # performance_evaluator.before_forward()
-                # loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
-                # # output = model(x=x, timestep=t, y=model_args['y'], mask=model_args['mask'])
-                # # Backward & update
-                # loss = loss_dict['loss'].mean()
-                # # booster.backward(loss=loss, optimizer=optimizer)
-                # performance_evaluator.before_backward()
-                # loss.backward()
-                # performance_evaluator.before_optimizer_update()
-                # optimizer.step()
-                # optimizer.zero_grad()
-                # # print("optim step pass")
                 
                 # Update EMA
                 update_ema(ema, model.module, optimizer=optimizer)
