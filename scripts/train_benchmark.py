@@ -321,7 +321,6 @@ def main():
                     model_args["x_mask"] = mask
                 else:
                     mask = None
-
                 # Video info
                 for k, v in batch.items():
                     model_args[k] = v.to(device, dtype)
@@ -338,21 +337,6 @@ def main():
                 performance_evaluator.before_optimizer_update()
                 optimizer.step()
                 optimizer.zero_grad()
-                
-                # # Diffusion without booster
-                # t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
-                # performance_evaluator.before_forward()
-                # loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
-                # # output = model(x=x, timestep=t, y=model_args['y'], mask=model_args['mask'])
-                # # Backward & update
-                # loss = loss_dict['loss'].mean()
-                # # booster.backward(loss=loss, optimizer=optimizer)
-                # performance_evaluator.before_backward()
-                # loss.backward()
-                # performance_evaluator.before_optimizer_update()
-                # optimizer.step()
-                # optimizer.zero_grad()
-                # # print("optim step pass")
                 
                 # Update EMA
                 update_ema(ema, model.module, optimizer=optimizer)

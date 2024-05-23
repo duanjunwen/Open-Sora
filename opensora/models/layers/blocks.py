@@ -328,9 +328,9 @@ class MultiHeadCrossAttention(nn.Module):
         q = self.q_linear(x).view(1, self.num_heads, -1, self.head_dim)
         kv = self.kv_linear(cond).view(1, self.num_heads, 2, -1, self.head_dim)
         k, v = kv.unbind(2)
-        # repeat mask along dim q_seq_length
+        # broadcast mask along dim q_seq_length; Cause sdp wont auto broadcast mask;
         if mask is not None:
-            mask = mask.repeat(1, 1 , q.shape[-2], 1)
+            mask = mask.view(1, 1, 1, k.shape[-2]).repeat(1, 1 , q.shape[-2], 1)
         # print(f"num_heads {self.num_heads} d_model {self.d_model} self.head_dim {self.head_dim}")
         # print(f"q_shape {q.shape} k_shape {k.shape} v_shape {v.shape} mask_shape {mask.shape}")
         x = F.scaled_dot_product_attention(q ,k ,v, attn_mask=mask, dropout_p=self.attn_drop.p)

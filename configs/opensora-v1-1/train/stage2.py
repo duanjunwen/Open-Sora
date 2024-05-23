@@ -40,7 +40,7 @@ sp_size = 1
 # Define model
 model = dict(
     type="STDiT2-XL/2",
-    from_pretrained=None,
+    from_pretrained="./pretrained_models/stdit/OpenSora-STDiT-v2-stage2",
     input_sq_size=512,  # pretrained model is trained on 512x512
     qk_norm=True,
     enable_flashattn=True,
@@ -48,13 +48,13 @@ model = dict(
 )
 vae = dict(
     type="VideoAutoencoderKL",
-    from_pretrained="stabilityai/sd-vae-ft-ema",
+    from_pretrained="./pretrained_models/stabilityai/sd-vae-ft-ema",
     micro_batch_size=4,
     local_files_only=True,
 )
 text_encoder = dict(
     type="t5",
-    from_pretrained="DeepFloyd/t5-v1_1-xxl",
+    from_pretrained="./pretrained_models/t5_ckpts/t5-v1_1-xxl",
     model_max_length=200,
     shardformer=True,
     local_files_only=True,
@@ -74,6 +74,6 @@ log_every = 10
 ckpt_every = 500
 load = None
 
-batch_size = None
+batch_size = 1
 lr = 2e-5
 grad_clip = 1.0
