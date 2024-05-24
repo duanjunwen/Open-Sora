@@ -11,8 +11,8 @@ dataset = dict(
 num_workers = 4
 dtype = "fp16"
 grad_checkpoint = True
-plugin = "zero2"
-# plugin = "zero2-seq"
+# plugin = "zero2"
+plugin = "zero2-seq"
 # plugin = "ddp"
 sp_size = 1
 
@@ -46,12 +46,12 @@ seed = 42
 outputs = "outputs"
 wandb = False
 
-epochs = 10
+epochs = 20
 log_every = 10
 ckpt_every = 100
 load = None
 
-batch_size = 3
+batch_size = 1
 lr = 2e-5
 grad_clip = 1.0
 

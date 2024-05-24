@@ -21,7 +21,7 @@ model = dict(
     space_scale=1.0,
     time_scale=2 / 3,
     # from_pretrained=None,
-    from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth",
+    from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-HQ-16x512x512.pth",
     enable_flashattn=True,
     enable_layernorm_kernel=True,
 )

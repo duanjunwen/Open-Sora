@@ -9,35 +9,36 @@ dataset = dict(
 
 # Define acceleration
 num_workers = 4
-dtype = "bf16"
+# dtype = "bf16"
+dtype = "fp16"
 grad_checkpoint = True
 plugin = "zero2"
 sp_size = 1
 
-# Define acceleration
-dtype = "bf16"
-grad_checkpoint = True
-plugin = "zero2-seq"
-sp_size = 2
+# # Define acceleration
+# dtype = "bf16"
+# grad_checkpoint = True
+# plugin = "zero2-seq"
+# sp_size = 2
 
 # Define model
 model = dict(
     type="STDiT-XL/2",
     space_scale=1.0,
     time_scale=2 / 3,
-    from_pretrained=None,
+    from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-HQ-16x512x512.pth",
     enable_flashattn=True,
     enable_layernorm_kernel=True,
     enable_sequence_parallelism=True,  # enable sq here
 )
 vae = dict(
     type="VideoAutoencoderKL",
-    from_pretrained="stabilityai/sd-vae-ft-ema",
+    from_pretrained="./pretrained_models/stabilityai/sd-vae-ft-ema",
     micro_batch_size=128,
 )
 text_encoder = dict(
     type="t5",
-    from_pretrained="DeepFloyd/t5-v1_1-xxl",
+    from_pretrained="./pretrained_models/t5_ckpts/t5-v1_1-xxl",
     model_max_length=120,
     shardformer=True,
 )
