@@ -1,6 +1,7 @@
 from copy import deepcopy
 from datetime import timedelta
 from pprint import pprint
+import thop
 
 import torch
 import torch_musa
@@ -306,7 +307,6 @@ def main():
                 x = batch.pop("video").to(device, dtype)  # [B, C, T, H, W]
                 y = batch.pop("text")
                 # Visual and text encoding
-                # print("Memory_reserved before vae & encoder: %fGB"%(torch.musa.memory_reserved()/1024/1024/1024))
                 with torch.no_grad():
                     # Prepare visual inputs
                     performance_evaluator.before_video_encode()

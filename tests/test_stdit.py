@@ -2,6 +2,7 @@ import copy
 import torch
 import torch.nn as nn
 import torch_musa
+import thop
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch.optim import Adam, AdamW
@@ -279,7 +280,8 @@ def test_stdit_xl_2_booster_step(device):
     N_token = 120
     caption_channels = 4096
     device = torch.device(device)
-    dtype = torch.float32
+    # dtype = torch.float32
+    dtype = torch.float16
     
     # ==============================
     # Dit Model Init
@@ -304,6 +306,8 @@ def test_stdit_xl_2_booster_step(device):
     booster = Booster(plugin=plugin)
     criterion = lambda x: x.mean()
     stdit_xl_2, optimizer, criterion, _, _ = booster.boost(stdit_xl_2, optimizer, criterion)
+    
+    
 
     # ==============================
     # Dit Data Init
@@ -321,6 +325,8 @@ def test_stdit_xl_2_booster_step(device):
     mask = torch.randn(B, N_token, dtype=dtype).to(device)  # [B, N_token]
     # mask = None
     
+    stdit_flops, stdit_params = thop.profile(model=stdit_xl_2, inputs=(x, timestep ,y))
+    print(f"stdit_flops {stdit_flops}; stdit_params {stdit_params}")
     # ==============================
     # Perform Fwd/Bwd
     # ==============================
@@ -334,7 +340,7 @@ def test_stdit_xl_2_booster_step(device):
     optimizer.step()
     optimizer.zero_grad()
     
-    print(f"Param after step:\n {model_param}")
+    # print(f"Param after step:\n {model_param}")
   
 
 if __name__ == "__main__":
