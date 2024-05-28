@@ -329,12 +329,21 @@ class MultiHeadCrossAttention(nn.Module):
         kv = self.kv_linear(cond).view(1, -1, 2, self.num_heads, self.head_dim)
         k, v = kv.unbind(2)
 
-        attn_bias = None
-        if mask is not None:
-            attn_bias = xformers.ops.fmha.BlockDiagonalMask.from_seqlens([N] * B, mask)
-        x = xformers.ops.memory_efficient_attention(q, k, v, p=self.attn_drop.p, attn_bias=attn_bias)
+        # attn_bias = None
+        # if mask is not None:
+        #     attn_bias = xformers.ops.fmha.BlockDiagonalMask.from_seqlens([N] * B, mask)
+        # x = xformers.ops.memory_efficient_attention(q, k, v, p=self.attn_drop.p, attn_bias=attn_bias)
 
-        x = x.view(B, -1, C)
+        # x = x.view(B, -1, C)
+        # x = self.proj(x)
+        # x = self.proj_drop(x)
+        if mask is not None:
+            mask = mask.view(1, 1, 1, k.shape[-2]).repeat(1, 1 , q.shape[-2], 1)
+        # print(f"num_heads {self.num_heads} d_model {self.d_model} self.head_dim {self.head_dim}")
+        # print(f"q_shape {q.shape} k_shape {k.shape} v_shape {v.shape} mask_shape {mask.shape}")
+        x = F.scaled_dot_product_attention(q ,k ,v, attn_mask=mask, dropout_p=self.attn_drop.p)
+        
+        x = x.contiguous().view(B, -1, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
