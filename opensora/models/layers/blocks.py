@@ -325,8 +325,10 @@ class MultiHeadCrossAttention(nn.Module):
         # query/value: img tokens; key: condition; mask: if padding tokens
         B, N, C = x.shape
 
-        q = self.q_linear(x).view(1, -1, self.num_heads, self.head_dim)
-        kv = self.kv_linear(cond).view(1, -1, 2, self.num_heads, self.head_dim)
+        # q = self.q_linear(x).view(1, -1, self.num_heads, self.head_dim)
+        # kv = self.kv_linear(cond).view(1, -1, 2, self.num_heads, self.head_dim)
+        q = self.q_linear(x).view(1, self.num_heads, -1, self.head_dim)
+        kv = self.kv_linear(cond).view(1, self.num_heads, 2, -1, self.head_dim)
         k, v = kv.unbind(2)
 
         # attn_bias = None
@@ -340,9 +342,9 @@ class MultiHeadCrossAttention(nn.Module):
         if mask is not None:
             # view to [1,1,1,120], then broadcast to  [1,1,4096,120]
             mask = mask.bool()
-            mask = mask.view(1, 1, 1, k.shape[-3]).repeat(1, 1 , q.shape[-3], 1)
+            mask = mask.view(1, 1, 1, k.shape[-2]).repeat(1, 1 , q.shape[-2], 1)
         # print(f"num_heads {self.num_heads} d_model {self.d_model} self.head_dim {self.head_dim}")
-        print(f"q_shape {q.shape} k_shape {k.shape} v_shape {v.shape} mask_shape {mask.shape}")
+        # print(f"q_shape {q.shape} k_shape {k.shape} v_shape {v.shape} mask_shape {mask.shape}")
         x = F.scaled_dot_product_attention(q ,k ,v, attn_mask=mask, dropout_p=self.attn_drop.p)
         
         x = x.contiguous().view(B, -1, C)
