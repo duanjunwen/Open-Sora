@@ -9,11 +9,11 @@ dataset = dict(
 
 # Define acceleration
 num_workers = 4
-# dtype = "bf16"
-dtype = "fp16"
+dtype = "bf16"
+# dtype = "fp16"
 grad_checkpoint = True
-# plugin = "zero2"
-plugin = "torch-ddp"
+plugin = "zero2"
+# plugin = "torch-ddp"
 # plugin = "torch-fsdp"
 sp_size = 1
 
@@ -60,7 +60,7 @@ log_every = 1
 ckpt_every = 100
 load = None
 
-# batch_size = 1
-batch_size = 8
+batch_size = 1
+# batch_size = 8
 lr = 2e-5
 grad_clip = 1.0
