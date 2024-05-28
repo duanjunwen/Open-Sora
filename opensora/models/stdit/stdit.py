@@ -267,7 +267,7 @@ class STDiT(nn.Module):
         Returns:
             x (torch.Tensor): output latent representation; of shape [B, C, T, H, W]
         """
-
+        B = x.shape[0]
         dtype = self.x_embedder.proj.weight.dtype
         x = x.to(dtype)
         timestep = timestep.to(dtype)
@@ -294,12 +294,27 @@ class STDiT(nn.Module):
             t0_mlp = None
         y = self.y_embedder(y, self.training)  # [B, 1, N_token, C]
 
+        # if mask is not None:
+        #     if mask.shape[0] != y.shape[0]:
+        #         mask = mask.repeat(y.shape[0] // mask.shape[0], 1)
+        #     mask = mask.squeeze(1).squeeze(1)
+        #     y = y.squeeze(1).masked_select(mask.unsqueeze(-1) != 0).view(1, -1, x.shape[-1])
+        #     y_lens = mask.sum(dim=1).tolist()
+        # else:
+        #     y_lens = [y.shape[2]] * y.shape[0]
+        #     y = y.squeeze(1).view(1, -1, x.shape[-1])
+        
         if mask is not None:
             if mask.shape[0] != y.shape[0]:
                 mask = mask.repeat(y.shape[0] // mask.shape[0], 1)
-            mask = mask.squeeze(1).squeeze(1)
-            y = y.squeeze(1).masked_select(mask.unsqueeze(-1) != 0).view(1, -1, x.shape[-1])
-            y_lens = mask.sum(dim=1).tolist()
+            mask = mask.squeeze(1).squeeze(1) # y shape ([1, 1, 120, 1152]); mask shape [120]
+            # y = y.float() # RuntimeError: Dtype of input tensor of masked_select only support Float32/Int32/Int64, but now it is Half
+            # y = y.squeeze(1).masked_select(mask.unsqueeze(-1) != 0).view(1, -1, x.shape[-1])
+            # y = y.half()
+            # print(f"before mask x{x.shape} y {y.shape} mask {mask.shape}")
+            y_lens = mask.view(B, 1, 1, 120) # last dim always 120
+            # mask = mask.repeat(x.shape[-2], 1)
+            # y_lens = mask.sum(dim=1).tolist()
         else:
             y_lens = [y.shape[2]] * y.shape[0]
             y = y.squeeze(1).view(1, -1, x.shape[-1])
