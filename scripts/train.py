@@ -49,8 +49,7 @@ def register_hooks(module):
     
     
     def bwd_pre_hook(module, grad_output):
-        # torch.musa.synchronize()
-        pass
+        torch.musa.synchronize()
         # print(f"{module._name} pre hook\n")
         # print(f"Grad output {grad_output} type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
         
