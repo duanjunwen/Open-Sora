@@ -5,7 +5,7 @@ from pprint import pprint
 import torch
 import torch.distributed as dist
 from colossalai.booster.plugin import TorchDDPPlugin, TorchFSDPPlugin
-import wandb
+# import wandb
 from colossalai.booster import Booster
 from colossalai.booster.plugin import LowLevelZeroPlugin
 from colossalai.cluster import DistCoordinator
@@ -280,7 +280,7 @@ def main():
                 # Video info
                 for k, v in batch.items():
                     model_args[k] = v.to(device, dtype)
-
+                print(f"model_args {model_args}")
                 # Diffusion
                 t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
                 performance_evaluator.before_forward()
