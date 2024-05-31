@@ -1,12 +1,12 @@
 from copy import deepcopy
 from datetime import timedelta
 from pprint import pprint
-import thop
+# import thop
 
 import torch
 import torch_musa
 import torch.distributed as dist
-import wandb
+# import wandb
 from colossalai.booster import Booster
 from colossalai.booster.plugin import LowLevelZeroPlugin
 from colossalai.booster.plugin import TorchDDPPlugin
@@ -46,7 +46,6 @@ def register_hooks(module):
         # print(f"{module._name} post hook\n")
         # print(f"Grad input {grad_input} type: {type(grad_input)}; len: {len(grad_input)}; shape {grad_input[0].shape}\n")
         # print(f"Grad output {grad_output} type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
-        
         # print(f"Grad input type: {type(grad_input)}; len: {len(grad_input)}; shape {grad_input[0].shape}\n")
         # print(f"Grad output type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
 
@@ -54,12 +53,20 @@ def register_hooks(module):
         torch.musa.synchronize()
         # print(f"{module._name} pre hook\n")
         # print(f"Grad output {grad_output} type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
-        
         # print(f"Grad output type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
     
     module.register_backward_hook(bwd_hook)
     module.register_full_backward_pre_hook(bwd_pre_hook)
+    
+    
+class ProfileModule(torch.nn.Module):
+	def __init__(self, module, fn='encode'):
+		super().__init__()
+		self.module = module
+		self.forward_func = getattr(module, fn)
 
+	def forward(self, *args):
+		return self.forward_func(*args)
 
 def main():
     # ======================================================
@@ -225,18 +232,11 @@ def main():
         hidden_size=model.hidden_size,
         vocab_size=text_encoder.output_dim,
         max_seq_length=512,
-        num_steps=31,
+        num_steps=10, # epoch * steps 
         use_torch_profiler=False,
-        # torch_profiler_path=args.torch_profiler_path,
-        # enable_grad_checkpoint=args.grad_checkpoint,
-        # grad_checkpoint_ratio=args.grad_checkpoint_ratio,
-        # ignore_steps=args.ignore_steps,
-        # grad_accum=args.grad_accum,
-        # include_optimizer_time=args.include_optimizer_time,
-        # disable_internal_sync=args.disable_internal_sync,
-        # dp_size=dp_size,
-        # tp_size=args.tp,
-        # pp_size=args.pp
+        # use_torch_profiler=True,
+        # torch_profiler_path=f"./profiler/{plugin}",
+        # ignore_steps=2,
     )
     
     # =======================================================
@@ -288,7 +288,7 @@ def main():
     for name, module in model.named_modules(prefix="stdit"):
         module._name = name
     
-    model.apply(register_hooks)
+    # model.apply(register_hooks)
     for epoch in range(start_epoch, cfg.epochs):
         if cfg.dataset.type == "VideoTextDataset":
             dataloader.sampler.set_epoch(epoch)
@@ -314,8 +314,11 @@ def main():
                     # Prepare text inputs
                     performance_evaluator.before_text_encode()
                     model_args = text_encoder.encode(y)
-                    
+                    # t5_profile_module = ProfileModule(module=text_encoder, fn='encode')
+                    # t5_flops, t5_params = thop.profile(model=t5_profile_module, inputs=(y,), custom_ops={t5_profile_module:t5_profile_module.forward})
+                    # print(f"t5_flops {t5_flops}, t5_params {t5_params}")
                 # Mask
+                # print(f"model_args {model_args}")
                 if cfg.mask_ratios is not None:
                     mask = mask_generator.get_masks(x)
                     model_args["x_mask"] = mask
@@ -324,7 +327,7 @@ def main():
                 # Video info
                 for k, v in batch.items():
                     model_args[k] = v.to(device, dtype)
-
+                    
                 # Diffusion
                 t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
                 performance_evaluator.before_forward()

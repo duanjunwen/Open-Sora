@@ -9,12 +9,15 @@ dataset = dict(
 
 # Define acceleration
 num_workers = 4
-dtype = "fp16"
+# dtype = "fp32"
+# dtype = "fp16"
+dtype = "bf16"
 grad_checkpoint = True
-# plugin = "zero2"
-plugin = "zero2-seq"
+plugin = "zero2"
+# plugin = "zero2-seq"
 # plugin = "ddp"
 sp_size = 1
+# sp_size = 2
 
 # Define model
 model = dict(
@@ -32,7 +35,8 @@ vae = dict(
 )
 text_encoder = dict(
     type="t5",
-    from_pretrained="./pretrained_models/t5_ckpts/t5-v1_1-xxl",
+    # from_pretrained="./pretrained_models/t5_ckpts/t5-v1_1-xxl",
+    from_pretrained="./pretrained_models/t5_ckpts/t5-v1_1-xxl_rebase",
     model_max_length=120,
     shardformer=True,
 )
@@ -46,7 +50,7 @@ seed = 42
 outputs = "outputs"
 wandb = False
 
-epochs = 20
+epochs = 1
 log_every = 10
 ckpt_every = 100
 load = None
@@ -56,3 +60,5 @@ lr = 2e-5
 grad_clip = 1.0
 
 random_dataset = False
+
+# wandb = True

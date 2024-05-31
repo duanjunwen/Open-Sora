@@ -13,7 +13,7 @@ from colossalai.nn.optimizer import HybridAdam
 from torch.optim import Adam
 from colossalai.utils import get_current_device, set_seed
 from tqdm import tqdm
-from wonderwords import RandomWord, RandomSentence
+# from wonderwords import RandomWord, RandomSentence
 
 from opensora.acceleration.checkpoint import set_grad_checkpoint
 from opensora.acceleration.parallel_states import (
@@ -49,7 +49,8 @@ def register_hooks(module):
     
     
     def bwd_pre_hook(module, grad_output):
-        torch.musa.synchronize()
+        # torch.musa.synchronize()
+        pass
         # print(f"{module._name} pre hook\n")
         # print(f"Grad output {grad_output} type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
         
@@ -246,7 +247,7 @@ def main():
         dataloader.sampler.set_start_index(sampler_start_idx)
     model_sharding(ema)
     # generator random sentence for y
-    s = RandomSentence()
+    # s = RandomSentence()
     # 6.2. training loop
     for name, module in model.named_modules(prefix="stdit"):
         module._name = name

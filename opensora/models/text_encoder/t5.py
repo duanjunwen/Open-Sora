@@ -34,7 +34,7 @@ from opensora.registry import MODELS
 
 class T5Embedder:
     # available_models = ["DeepFloyd/t5-v1_1-xxl","./pretrained_models/t5_ckpts/t5-v1_1-xxl"]
-    available_models = ["./pretrained_models/t5_ckpts/t5-v1_1-xxl"]
+    available_models = ["./pretrained_models/t5_ckpts/t5-v1_1-xxl", "./pretrained_models/t5_ckpts/t5-v1_1-xxl_rebase"]
 
     def __init__(
         self,
@@ -100,7 +100,6 @@ class T5Embedder:
 
         self.use_text_preprocessing = use_text_preprocessing
         self.hf_token = hf_token
-        print(f"from_pretrained {from_pretrained}")
         assert from_pretrained in self.available_models
         self.tokenizer = AutoTokenizer.from_pretrained(
             from_pretrained,
@@ -125,7 +124,6 @@ class T5Embedder:
             add_special_tokens=True,
             return_tensors="pt",
         )
-
         input_ids = text_tokens_and_mask["input_ids"].to(self.device)
         attention_mask = text_tokens_and_mask["attention_mask"].to(self.device)
         with torch.no_grad():

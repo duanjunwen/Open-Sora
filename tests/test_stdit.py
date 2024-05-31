@@ -281,8 +281,8 @@ def test_stdit_xl_2_booster_step(device):
     caption_channels = 4096
     device = torch.device(device)
     # dtype = torch.float32
-    dtype = torch.float16
-    
+    # dtype = torch.float16
+    dtype = torch.bfloat16
     # ==============================
     # Dit Model Init
     # ==============================
@@ -299,7 +299,9 @@ def test_stdit_xl_2_booster_step(device):
     # ==============================
     plugin = LowLevelZeroPlugin(
             stage=2,
-            precision='fp32',
+            # precision='fp32',
+            # precision='fp16',
+            precision='bf16',
             initial_scale=2**16,
             max_norm=1.0,
         )
@@ -307,8 +309,6 @@ def test_stdit_xl_2_booster_step(device):
     criterion = lambda x: x.mean()
     stdit_xl_2, optimizer, criterion, _, _ = booster.boost(stdit_xl_2, optimizer, criterion)
     
-    
-
     # ==============================
     # Dit Data Init
     # ==============================
@@ -325,15 +325,17 @@ def test_stdit_xl_2_booster_step(device):
     mask = torch.randn(B, N_token, dtype=dtype).to(device)  # [B, N_token]
     # mask = None
     
-    stdit_flops, stdit_params = thop.profile(model=stdit_xl_2, inputs=(x, timestep ,y))
+    stdit_flops, stdit_params = thop.profile(model=stdit_xl_2, inputs=(x, timestep ,y, mask))
     print(f"stdit_flops {stdit_flops}; stdit_params {stdit_params}")
     # ==============================
     # Perform Fwd/Bwd
     # ==============================
     x_stdit = stdit_xl_2(x=x, timestep=timestep, y=y, mask=mask) 
+    # print(f"x_stdit output {x_stdit}")
+    # print(f"loss {x_stdit.mean()}")
     # x_stdit.mean().backward() # get grad
-    optimizer.backward(x_stdit.sum())
-    
+    loss = optimizer.backward(x_stdit.sum())
+    # print(f"loss {loss}")
     # ==============================
     # Perform Optim Step
     # ==============================

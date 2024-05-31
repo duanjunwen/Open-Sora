@@ -202,6 +202,9 @@ class PerformanceEvaluator:
         self.num_samples: int = 0
         self.flop_megatron = 0
         self.flop: int = 0
+        self.stdit_flops: int = 0
+        self.vae_flops: int = 0
+        self.t5_flops: int = 0
         self.skip_record = True
         self.step_cnt = 0 # The number of benchmarked iterations, should be args.num_steps - args.ignore_steps
         # When opening grad accum, the number of calling optimizer.step might be smaller than self.step_cnt
@@ -245,6 +248,7 @@ class PerformanceEvaluator:
                 record_shapes=True,
                 profile_memory=True,
                 with_stack=True,
+                with_flops=True,
             )
             self.torch_profiler.start()
 
@@ -353,11 +357,15 @@ class PerformanceEvaluator:
         avg_throughput = self.num_samples * self.dp_size / (avg_duration + 1e-12)
         tokens_per_gpu_per_second = self.num_samples * self.max_seq_length / (avg_duration + 1e-12) / self.mp_world_size
         avg_tflops_per_gpu_megatron = self.flop_megatron / 1e12 / (avg_duration + 1e-12) / self.mp_world_size
+        avg_stdit_tflops_per_gpu = self.stdit_flops / 1e12 / (self.timer.forward_duration + self.timer.backward_duration + 1e-12) / self.mp_world_size
+        avg_t5_tflops_per_gpu = self.t5_flops / 1e12 / (self.timer.text_encode_duration + 1e-12) / self.mp_world_size
+        avg_vae_tflops_per_gpu = self.vae_flops / 1e12 / (self.timer.video_encode_duration + 1e-12) / self.mp_world_size
         avg_tflops_per_gpu = self.flop / 1e12 / (avg_duration + 1e-12) / self.mp_world_size
         self.coordinator.print_on_master(
             f"Overall Stats: "
             f"batch_size_per_device: {self.num_samples / num_record_steps}, sequence_length: {self.max_seq_length}, dp_size: {self.dp_size}, "
             f"Latency: {avg_latency:.3f} s, Throughput: {avg_throughput:.3f} samples/sec, TGS: {tokens_per_gpu_per_second:.3f} tokens/s, "
+            # f"(STDIT)TFLOPS per GPU: {avg_stdit_tflops_per_gpu:.3f}, (T5 encoder)TFLOPS per GPU(Megatron): {avg_t5_tflops_per_gpu:.3f}, (vae encoder)TFLOPS per GPU(Megatron): {avg_vae_tflops_per_gpu:.3f}"
             f"TFLOPS per GPU: {avg_tflops_per_gpu:.3f}, TFLOPS per GPU(Megatron): {avg_tflops_per_gpu_megatron:.3f}"
             f"\n"
         )

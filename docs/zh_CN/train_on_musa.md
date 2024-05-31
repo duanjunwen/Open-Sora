@@ -6,6 +6,7 @@
 
 创建用于存放视频(video), 片段(clips)和视频处理信息的文件夹(meta);
 ```bash
+mkdir ./dataset/panda3m
 mkdir ./dataset/panda3m/video
 mkdir ./dataset/panda3m/clips
 mkdir ./dataset/panda3m/meta

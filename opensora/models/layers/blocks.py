@@ -15,6 +15,7 @@ from typing import Optional
 
 import numpy as np
 import torch
+import torch_musa
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
@@ -120,7 +121,6 @@ class PatchEmbed3D(nn.Module):
             x = F.pad(x, (0, 0, 0, self.patch_size[1] - H % self.patch_size[1]))
         if D % self.patch_size[0] != 0:
             x = F.pad(x, (0, 0, 0, 0, 0, self.patch_size[0] - D % self.patch_size[0]))
-
         x = self.proj(x)  # (B C T H W)
         if self.norm is not None:
             D, Wh, Ww = x.size(2), x.size(3), x.size(4)
@@ -331,9 +331,7 @@ class MultiHeadCrossAttention(nn.Module):
         # broadcast mask along dim q_seq_length; Cause sdp wont auto broadcast mask;
         if mask is not None:
             mask = mask.view(1, 1, 1, k.shape[-2]).repeat(1, 1 , q.shape[-2], 1)
-        # print(f"num_heads {self.num_heads} d_model {self.d_model} self.head_dim {self.head_dim}")
-        # print(f"q_shape {q.shape} k_shape {k.shape} v_shape {v.shape} mask_shape {mask.shape}")
-        x = F.scaled_dot_product_attention(q ,k ,v, attn_mask=mask, dropout_p=self.attn_drop.p)
+        x = F.scaled_dot_product_attention(query=q ,key=k ,value=v, attn_mask=mask, dropout_p=self.attn_drop.p)
         
         x = x.contiguous().view(B, -1, C)
         x = self.proj(x)
@@ -604,6 +602,7 @@ class CaptionEmbedder(nn.Module):
             drop_ids = torch.rand(caption.shape[0]).to(device="musa") < self.uncond_prob
         else:
             drop_ids = force_drop_ids == 1
+        # print(f"self.y_embedding {self.y_embedding.shape} {caption.shape}")
         caption = torch.where(drop_ids[:, None, None, None], self.y_embedding, caption)
         return caption
 
