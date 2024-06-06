@@ -5,6 +5,8 @@ from pprint import pprint
 
 import torch
 import torch_musa
+# import pandas as pd
+# import numpy as np
 import torch.distributed as dist
 # import wandb
 from colossalai.booster import Booster
@@ -13,7 +15,7 @@ from colossalai.booster.plugin import TorchDDPPlugin
 from colossalai.booster.plugin import TorchFSDPPlugin
 from colossalai.cluster import DistCoordinator
 from colossalai.nn.optimizer import HybridAdam
-from torch.optim import Adam, AdamW
+# from torch.optim import Adam, AdamW
 from colossalai.utils import get_current_device, set_seed
 from tqdm import tqdm
 import functools
@@ -43,6 +45,8 @@ from opensora.utils.train_utils import MaskGenerator, update_ema
 def register_hooks(module):
     def bwd_hook(module, grad_input, grad_output):
         torch.musa.synchronize()
+        # if 'proj' in module._name:
+        #     print(f"{module._name} {module.dtype}")
         # print(f"{module._name} post hook\n")
         # print(f"Grad input {grad_input} type: {type(grad_input)}; len: {len(grad_input)}; shape {grad_input[0].shape}\n")
         # print(f"Grad output {grad_output} type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
@@ -288,6 +292,7 @@ def main():
     for name, module in model.named_modules(prefix="stdit"):
         module._name = name
     
+    # loss_list = list()
     # model.apply(register_hooks)
     for epoch in range(start_epoch, cfg.epochs):
         if cfg.dataset.type == "VideoTextDataset":
@@ -295,6 +300,7 @@ def main():
         dataloader_iter = iter(dataloader)
         logger.info(f"Beginning epoch {epoch}...")
 
+        
         with tqdm(
             enumerate(dataloader_iter, start=start_step),
             desc=f"Epoch {epoch}",
@@ -335,6 +341,8 @@ def main():
                 # Backward & update
                 loss = loss_dict["loss"].mean()
                 logger.info(f"loss: {loss}\n")
+                # loss_list.append(float(loss.to('cpu')))
+                
                 performance_evaluator.before_backward()
                 booster.backward(loss=loss, optimizer=optimizer)
                 performance_evaluator.before_optimizer_update()
@@ -401,6 +409,10 @@ def main():
             print("Epoch done, recomputing batch sampler")
         start_step = 0
     performance_evaluator.on_fit_end()
+
+    # df = pd.DataFrame(loss_list)
+    # df.to_csv("./loss_curve.csv",index=False)
+    
 
 if __name__ == "__main__":
     main()

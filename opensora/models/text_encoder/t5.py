@@ -184,7 +184,9 @@ class T5Encoder:
         )
         shard_former = ShardFormer(shard_config=shard_config)
         optim_model, _ = shard_former.optimize(self.t5.model, policy=T5EncoderPolicy())
-        self.t5.model = optim_model.half()
+        # self.t5.model = optim_model.half()
+        # self.t5.model = optim_model
+        self.t5.model = optim_model.to(dtype=torch.bfloat16)
 
         # ensure the weights are frozen
         requires_grad(self.t5.model, False)

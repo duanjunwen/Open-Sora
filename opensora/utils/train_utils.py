@@ -63,6 +63,27 @@ def update_ema(
             if name.startswith('module'):
                 name = '.'.join(name.split('.')[1:])
             ema_params[name].mul_(decay).add_(param_data, alpha=1 - decay)
+    
+    
+    # ema_params = OrderedDict(ema_model.named_parameters())
+    # model_params = OrderedDict(model.named_parameters())
+
+    # for name, param in model_params.items():
+    #     if name == "pos_embed":
+    #         continue
+    #     if param.requires_grad == False:
+    #         continue
+    #     if not sharded:
+    #         param_data = param.data
+    #         ema_params[name].mul_(decay).add_(param_data, alpha=1 - decay)
+    #     else:
+    #         if param.data.dtype != torch.float32:
+    #             param_id = id(param)
+    #             master_param = optimizer._param_store.working_to_master_param[param_id]
+    #             param_data = master_param.data
+    #         else:
+    #             param_data = param.data
+    #         ema_params[name].mul_(decay).add_(param_data, alpha=1 - decay)
 
 
 class MaskGenerator:

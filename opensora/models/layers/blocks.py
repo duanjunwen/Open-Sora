@@ -602,8 +602,11 @@ class CaptionEmbedder(nn.Module):
             drop_ids = torch.rand(caption.shape[0]).to(device="musa") < self.uncond_prob
         else:
             drop_ids = force_drop_ids == 1
-        # print(f"self.y_embedding {self.y_embedding.shape} {caption.shape}")
+        # print(f"drop_ids {drop_ids[:, None, None, None]} self.y_embedding {self.y_embedding.shape} caption {caption.shape}")
         caption = torch.where(drop_ids[:, None, None, None], self.y_embedding, caption)
+        # y_embedding_broadcast = self.y_embedding.repeat(caption.shape[0]).reshape_as(caption.shape)  # broadcast y_embedding[120, 4096] to shape caption[BatchSize, 1, 120, 4096]
+        # print(f" self.y_embedding {y_embedding_broadcast.shape} caption {caption.shape}")
+        # caption = torch.where(drop_ids[:, None, None, None], y_embedding_broadcast, caption)
         return caption
 
     def forward(self, caption, train, force_drop_ids=None):
