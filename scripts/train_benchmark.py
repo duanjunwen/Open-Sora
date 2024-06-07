@@ -93,8 +93,10 @@ def main():
         set_data_parallel_group(plugin.dp_group)
     elif cfg.plugin == "torch-ddp":
         plugin = TorchDDPPlugin()
+        set_data_parallel_group(dist.group.WORLD)
     elif cfg.plugin == "torch-fsdp":
         plugin = TorchFSDPPlugin
+        set_data_parallel_group(dist.group.WORLD)
     else:
         raise ValueError(f"Unknown plugin {cfg.plugin}")
     booster = Booster(plugin=plugin)
@@ -280,7 +282,7 @@ def main():
                 # Video info
                 for k, v in batch.items():
                     model_args[k] = v.to(device, dtype)
-                print(f"model_args {model_args}")
+
                 # Diffusion
                 t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
                 performance_evaluator.before_forward()
@@ -288,6 +290,7 @@ def main():
 
                 # Backward & update
                 loss = loss_dict["loss"].mean()
+                logger.info(f"loss: {loss}\n")
                 performance_evaluator.before_backward()
                 booster.backward(loss=loss, optimizer=optimizer)
                 performance_evaluator.before_optimizer_update()

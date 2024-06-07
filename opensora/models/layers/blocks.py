@@ -331,20 +331,10 @@ class MultiHeadCrossAttention(nn.Module):
         kv = self.kv_linear(cond).view(1, self.num_heads, 2, -1, self.head_dim)
         k, v = kv.unbind(2)
 
-        # attn_bias = None
-        # if mask is not None:
-        #     attn_bias = xformers.ops.fmha.BlockDiagonalMask.from_seqlens([N] * B, mask)
-        # x = xformers.ops.memory_efficient_attention(q, k, v, p=self.attn_drop.p, attn_bias=attn_bias)
-        # print(f"q_shape {q.shape} k_shape {k.shape} v_shape {v.shape} mask_shape {mask.shape}")
-        # x = x.view(B, -1, C)
-        # x = self.proj(x)
-        # x = self.proj_drop(x)
         if mask is not None:
             # view to [1,1,1,120], then broadcast to  [1,1,4096,120]
             mask = mask.bool()
             mask = mask.view(1, 1, 1, k.shape[-2]).repeat(1, 1 , q.shape[-2], 1)
-        # print(f"num_heads {self.num_heads} d_model {self.d_model} self.head_dim {self.head_dim}")
-        # print(f"q_shape {q.shape} k_shape {k.shape} v_shape {v.shape} mask_shape {mask.shape}")
         x = F.scaled_dot_product_attention(q ,k ,v, attn_mask=mask, dropout_p=self.attn_drop.p)
         
         x = x.contiguous().view(B, -1, C)
@@ -393,9 +383,11 @@ class SeqParallelMultiHeadCrossAttention(MultiHeadCrossAttention):
 
         # compute attention
         attn_bias = None
-        if mask is not None:
-            attn_bias = xformers.ops.fmha.BlockDiagonalMask.from_seqlens([N] * B, mask)
-        x = xformers.ops.memory_efficient_attention(q, k, v, p=self.attn_drop.p, attn_bias=attn_bias)
+        # if mask is not None:
+        #     attn_bias = xformers.ops.fmha.BlockDiagonalMask.from_seqlens([N] * B, mask)
+        # x = xformers.ops.memory_efficient_attention(q, k, v, p=self.attn_drop.p, attn_bias=attn_bias)
+        x = F.scaled_dot_product_attention(query=q, key=k, value=v, attn_mask=mask, dropout_p=self.attn_drop.p)
+
 
         # apply all to all to gather back attention heads and scatter sequence
         x = x.view(B, -1, self.num_heads // sp_size, self.head_dim)
