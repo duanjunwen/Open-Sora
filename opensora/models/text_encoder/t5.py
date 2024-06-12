@@ -27,15 +27,117 @@ import re
 import ftfy
 import torch
 import torch_musa
+import torch.nn as nn
 from transformers import AutoTokenizer, T5EncoderModel
 
 from opensora.registry import MODELS
 
 
-class T5Embedder:
+# class T5Embedder:
+#     # available_models = ["DeepFloyd/t5-v1_1-xxl","./pretrained_models/t5_ckpts/t5-v1_1-xxl"]
+#     available_models = ["./pretrained_models/t5_ckpts/t5-v1_1-xxl", "./pretrained_models/t5_ckpts/t5-v1_1-xxl_rebase"]
+
+#     def __init__(
+#         self,
+#         device,
+#         from_pretrained=None,
+#         *,
+#         cache_dir=None,
+#         hf_token=None,
+#         use_text_preprocessing=True,
+#         t5_model_kwargs=None,
+#         torch_dtype=None,
+#         use_offload_folder=None,
+#         model_max_length=120,
+#         local_files_only=False,
+#     ):
+#         self.device = torch.device(device)
+#         self.torch_dtype = torch_dtype or torch.bfloat16
+#         self.cache_dir = cache_dir
+
+#         if t5_model_kwargs is None:
+#             t5_model_kwargs = {
+#                 "low_cpu_mem_usage": True,
+#                 "torch_dtype": self.torch_dtype,
+#             }
+
+#             if use_offload_folder is not None:
+#                 t5_model_kwargs["offload_folder"] = use_offload_folder
+#                 t5_model_kwargs["device_map"] = {
+#                     "shared": self.device,
+#                     "encoder.embed_tokens": self.device,
+#                     "encoder.block.0": self.device,
+#                     "encoder.block.1": self.device,
+#                     "encoder.block.2": self.device,
+#                     "encoder.block.3": self.device,
+#                     "encoder.block.4": self.device,
+#                     "encoder.block.5": self.device,
+#                     "encoder.block.6": self.device,
+#                     "encoder.block.7": self.device,
+#                     "encoder.block.8": self.device,
+#                     "encoder.block.9": self.device,
+#                     "encoder.block.10": self.device,
+#                     "encoder.block.11": self.device,
+#                     "encoder.block.12": "disk",
+#                     "encoder.block.13": "disk",
+#                     "encoder.block.14": "disk",
+#                     "encoder.block.15": "disk",
+#                     "encoder.block.16": "disk",
+#                     "encoder.block.17": "disk",
+#                     "encoder.block.18": "disk",
+#                     "encoder.block.19": "disk",
+#                     "encoder.block.20": "disk",
+#                     "encoder.block.21": "disk",
+#                     "encoder.block.22": "disk",
+#                     "encoder.block.23": "disk",
+#                     "encoder.final_layer_norm": "disk",
+#                     "encoder.dropout": "disk",
+#                 }
+#             else:
+#                 t5_model_kwargs["device_map"] = {
+#                     "shared": self.device,
+#                     "encoder": self.device,
+#                 }
+
+#         self.use_text_preprocessing = use_text_preprocessing
+#         self.hf_token = hf_token
+#         assert from_pretrained in self.available_models
+#         self.tokenizer = AutoTokenizer.from_pretrained(
+#             from_pretrained,
+#             cache_dir=cache_dir,
+#             local_files_only=local_files_only,
+#         )
+#         self.model = T5EncoderModel.from_pretrained(
+#             from_pretrained,
+#             cache_dir=cache_dir,
+#             local_files_only=local_files_only,
+#             **t5_model_kwargs,
+#         ).eval()
+#         self.model_max_length = model_max_length
+
+#     def get_text_embeddings(self, texts):
+#         text_tokens_and_mask = self.tokenizer(
+#             texts,
+#             max_length=self.model_max_length,
+#             padding="max_length",
+#             truncation=True,
+#             return_attention_mask=True,
+#             add_special_tokens=True,
+#             return_tensors="pt",
+#         )
+#         input_ids = text_tokens_and_mask["input_ids"].to(self.device)
+#         attention_mask = text_tokens_and_mask["attention_mask"].to(self.device)
+#         with torch.no_grad():
+#             text_encoder_embs = self.model(
+#                 input_ids=input_ids,
+#                 attention_mask=attention_mask,
+#             )["last_hidden_state"].detach()
+#         return text_encoder_embs, attention_mask
+
+
+class T5Embedder(nn.Module):
     # available_models = ["DeepFloyd/t5-v1_1-xxl","./pretrained_models/t5_ckpts/t5-v1_1-xxl"]
     available_models = ["./pretrained_models/t5_ckpts/t5-v1_1-xxl", "./pretrained_models/t5_ckpts/t5-v1_1-xxl_rebase"]
-
     def __init__(
         self,
         device,
@@ -50,6 +152,7 @@ class T5Embedder:
         model_max_length=120,
         local_files_only=False,
     ):
+        super().__init__()
         self.device = torch.device(device)
         self.torch_dtype = torch_dtype or torch.bfloat16
         self.cache_dir = cache_dir
@@ -113,8 +216,8 @@ class T5Embedder:
             **t5_model_kwargs,
         ).eval()
         self.model_max_length = model_max_length
-
-    def get_text_embeddings(self, texts):
+    
+    def forward(self, texts):
         text_tokens_and_mask = self.tokenizer(
             texts,
             max_length=self.model_max_length,
@@ -133,20 +236,85 @@ class T5Embedder:
             )["last_hidden_state"].detach()
         return text_encoder_embs, attention_mask
 
+# @MODELS.register_module("t5")
+# class T5Encoder:
+#     def __init__(
+#         self,
+#         from_pretrained=None,
+#         model_max_length=120,
+#         # device="cuda",
+#         device="musa",
+#         dtype=torch.float,
+#         cache_dir=None,
+#         shardformer=False,
+#         local_files_only=False,
+#     ):
+#         assert from_pretrained is not None, "Please specify the path to the T5 model"
+
+#         self.t5 = T5Embedder(
+#             device=device,
+#             torch_dtype=dtype,
+#             from_pretrained=from_pretrained,
+#             cache_dir=cache_dir,
+#             model_max_length=model_max_length,
+#             local_files_only=local_files_only,
+#         )
+#         self.t5.model.to(dtype=dtype)
+#         self.y_embedder = None
+
+#         self.model_max_length = model_max_length
+#         self.output_dim = self.t5.model.config.d_model
+
+#         if shardformer:
+#             self.shardformer_t5()
+
+#     def shardformer_t5(self):
+#         from colossalai.shardformer import ShardConfig, ShardFormer
+
+#         from opensora.acceleration.shardformer.policy.t5_encoder import T5EncoderPolicy
+#         from opensora.utils.misc import requires_grad
+
+#         shard_config = ShardConfig(
+#             tensor_parallel_process_group=None,
+#             pipeline_stage_manager=None,
+#             enable_tensor_parallelism=False,
+#             enable_fused_normalization=False,
+#             enable_flash_attention=False,
+#             enable_jit_fused=True,
+#             enable_sequence_parallelism=False,
+#             enable_sequence_overlap=False,
+#         )
+#         shard_former = ShardFormer(shard_config=shard_config)
+#         optim_model, _ = shard_former.optimize(self.t5.model, policy=T5EncoderPolicy())
+#         # self.t5.model = optim_model.half()
+#         # self.t5.model = optim_model
+#         self.t5.model = optim_model.to(dtype=torch.bfloat16)
+
+#         # ensure the weights are frozen
+#         requires_grad(self.t5.model, False)
+
+#     def encode(self, text):
+#         caption_embs, emb_masks = self.t5.get_text_embeddings(text)
+#         caption_embs = caption_embs[:, None]
+#         return dict(y=caption_embs, mask=emb_masks)
+
+#     def null(self, n):
+#         null_y = self.y_embedder.y_embedding[None].repeat(n, 1, 1)[:, None]
+#         return null_y
 
 @MODELS.register_module("t5")
-class T5Encoder:
+class T5Encoder(nn.Module):
     def __init__(
         self,
         from_pretrained=None,
         model_max_length=120,
-        # device="cuda",
         device="musa",
-        dtype=torch.float,
+        dtype=torch.bfloat16,
         cache_dir=None,
         shardformer=False,
         local_files_only=False,
     ):
+        super().__init__()
         assert from_pretrained is not None, "Please specify the path to the T5 model"
 
         self.t5 = T5Embedder(
@@ -165,7 +333,7 @@ class T5Encoder:
 
         if shardformer:
             self.shardformer_t5()
-
+        
     def shardformer_t5(self):
         from colossalai.shardformer import ShardConfig, ShardFormer
 
@@ -190,16 +358,20 @@ class T5Encoder:
 
         # ensure the weights are frozen
         requires_grad(self.t5.model, False)
-
-    def encode(self, text):
-        caption_embs, emb_masks = self.t5.get_text_embeddings(text)
+    
+    # def encode(self, text):
+    #     caption_embs, emb_masks = self.t5.get_text_embeddings(text)
+    #     caption_embs = caption_embs[:, None]
+    #     return dict(y=caption_embs, mask=emb_masks)
+    def forward(self, text):
+        caption_embs, emb_masks = self.t5.forward(text)
         caption_embs = caption_embs[:, None]
         return dict(y=caption_embs, mask=emb_masks)
 
     def null(self, n):
         null_y = self.y_embedder.y_embedding[None].repeat(n, 1, 1)[:, None]
         return null_y
-
+    
 
 def basic_clean(text):
     text = ftfy.fix_text(text)

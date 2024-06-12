@@ -9,10 +9,15 @@ dataset = dict(
 
 # Define acceleration
 num_workers = 4
-dtype = "fp16"
+dtype = "bf16"
 grad_checkpoint = True
-plugin = "zero2"
+# plugin = "ddp"
+# plugin = "zero2"
+plugin = "zero2-seq"
 sp_size = 1
+# sp_size = 2
+# sp_size = 4
+sp_size = 8
 
 # Define model
 model = dict(
@@ -44,7 +49,7 @@ seed = 42
 outputs = "outputs"
 wandb = False
 
-epochs = 10
+epochs = 1
 log_every = 10
 ckpt_every = 100
 load = None

@@ -13,11 +13,13 @@ num_workers = 4
 # dtype = "fp16"
 dtype = "bf16"
 grad_checkpoint = True
-plugin = "zero2"
-# plugin = "zero2-seq"
 # plugin = "ddp"
+# plugin = "zero2"
+plugin = "zero2-seq"
 sp_size = 1
 # sp_size = 2
+# sp_size = 4
+# sp_size = 8
 
 # Define model
 model = dict(
@@ -39,6 +41,7 @@ text_encoder = dict(
     from_pretrained="./pretrained_models/t5_ckpts/t5-v1_1-xxl_rebase",
     model_max_length=120,
     shardformer=True,
+    # shardformer=False,
 )
 scheduler = dict(
     type="iddpm",
@@ -55,7 +58,7 @@ log_every = 10
 ckpt_every = 100
 load = None
 
-batch_size = 2
+batch_size = 4
 lr = 2e-5
 grad_clip = 1.0
 
