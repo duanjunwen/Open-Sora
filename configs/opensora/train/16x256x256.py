@@ -53,12 +53,12 @@ seed = 42
 outputs = "outputs"
 wandb = False
 
-epochs = 10
+epochs = 1
 log_every = 10
 ckpt_every = 100
 load = None
 
-batch_size = 7
+batch_size = 4
 lr = 2e-5
 grad_clip = 1.0
 
