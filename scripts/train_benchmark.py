@@ -10,7 +10,8 @@ from colossalai.booster import Booster
 from colossalai.booster.plugin import LowLevelZeroPlugin
 from colossalai.cluster import DistCoordinator
 from colossalai.nn.optimizer import HybridAdam
-from colossalai.utils import get_current_device, set_seed
+from colossalai.utils import get_current_device
+from opensora.utils.train_utils import set_seed
 from tqdm import tqdm
 import functools
 from functools import partial

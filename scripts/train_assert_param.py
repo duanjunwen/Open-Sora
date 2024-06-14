@@ -11,8 +11,8 @@ from colossalai.booster import Booster
 from colossalai.booster.plugin import LowLevelZeroPlugin
 from colossalai.cluster import DistCoordinator
 from colossalai.nn.optimizer import HybridAdam
-# from colossalai.utils import get_current_device, set_seed
 from colossalai.utils import get_current_device
+from opensora.utils.train_utils import set_seed
 from tqdm import tqdm
 import functools
 from functools import partial
@@ -48,8 +48,8 @@ def register_hooks(module):
         # print(f"Grad output {grad_output} type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
         # print(f"Grad input type: {type(grad_input)}; len: {len(grad_input)}; shape {grad_input[0].shape}\n")
         # print(f"Grad output type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
-        torch.save(grad_input, f"./dataset/assert_closed/{module._name}_grad_input.txt")
-        torch.save(grad_output, f"./dataset/assert_closed/{module._name}_grad_output.txt")
+        # torch.save(grad_input, f"./dataset/assert_closed/{module._name}_grad_input.txt")
+        # torch.save(grad_output, f"./dataset/assert_closed/{module._name}_grad_output.txt")
 
     def bwd_pre_hook(module, grad_output):
         torch.musa.synchronize()
@@ -59,17 +59,6 @@ def register_hooks(module):
     
     module.register_backward_hook(bwd_hook)
     # module.register_full_backward_pre_hook(bwd_pre_hook)
-
-def set_seed(seed):
-    random.seed(seed)                          
-    np.random.seed(seed)                       
-    torch.manual_seed(seed)                    
-    torch.cuda.manual_seed(seed)               
-    torch.cuda.manual_seed_all(seed)     
-          
-    # torch.backends.cudnn.deterministic = True 
-
-
 
 def main():
     # ======================================================

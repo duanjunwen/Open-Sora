@@ -3,6 +3,7 @@ import random
 from collections import OrderedDict
 
 import torch
+import numpy as np
 
 
 @torch.no_grad()
@@ -118,3 +119,13 @@ class MaskGenerator:
             masks.append(mask)
         masks = torch.stack(masks, dim=0)
         return masks
+
+
+def set_seed(seed):
+    random.seed(seed)                          
+    np.random.seed(seed)                       
+    torch.manual_seed(seed)                    
+    torch.cuda.manual_seed(seed)               
+    torch.cuda.manual_seed_all(seed)     
+    # torch.backends.cudnn.deterministic = True 
+   
