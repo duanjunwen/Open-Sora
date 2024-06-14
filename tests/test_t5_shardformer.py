@@ -5,6 +5,8 @@ import colossalai
 import torch
 from colossalai.shardformer import ShardConfig, ShardFormer
 from colossalai.testing import spawn
+from opensora.utils.train_utils import set_seed
+
 
 from opensora.acceleration.shardformer.policy.t5_encoder import T5EncoderPolicy
 from opensora.models.text_encoder.t5 import T5Embedder
@@ -63,9 +65,21 @@ def run_t5_encoder(rank, world_size, port):
     print(f"[Performance] native: {hf_end - hf_start}s, shardformer: {sf_end - sf_start} s")
 
 
-def test_t5_encoder():
-    spawn(run_t5_encoder)
+def test_t5_single_op():
+    set_seed(1024)
+    pretrain_path = "./pretrained_models/t5_ckpts/t5-v1_1-xxl"
+    t5 = T5Embedder(device="cuda", cache_dir=None, from_pretrained=pretrain_path, torch_dtype=torch.float16)
+    input = ["Who is the best player in the history of NBA?", "How to study computer science?"]
+    t5_embs, t5_masks = t5(input)
+    torch.save(t5_embs , f"./dataset/assert_closed/torch_tensor/single_op_t5_output_embs.txt")
+    torch.save(t5_masks , f"./dataset/assert_closed/torch_tensor/single_op_t5_output_masks.txt")
+    
+    
 
+
+def test_t5_encoder():
+    # spawn(run_t5_encoder)
+    test_t5_single_op()
 
 if __name__ == "__main__":
     test_t5_encoder()

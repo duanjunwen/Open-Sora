@@ -2,16 +2,14 @@ import copy
 import torch
 import torch.nn as nn
 from torch.testing import assert_close
-# import sys
-# sys.path.append('./Open-Sora/opensora/models/vae')
 from opensora.models.vae import VideoAutoencoderKL, VideoAutoencoderKLTemporalDecoder
-
+from opensora.utils.train_utils import set_seed
 
 # TODO: assert vae input & output and param init; (no param bwd)
 def test_vae_single_op():
     device = torch.device("cuda")
     dtype = torch.float
-    torch.manual_seed(1024)
+    set_seed(1024)
     # Test Variational Auto-Encoder; already download; 
     vae_kl = VideoAutoencoderKL(from_pretrained="./pretrained_models/stabilityai/sd-vae-ft-ema").to(device)
     

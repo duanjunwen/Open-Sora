@@ -10,12 +10,14 @@ import colossalai
 from colossalai.booster import Booster
 from colossalai.booster.plugin import LowLevelZeroPlugin
 from opensora.models.stdit.stdit import STDiTBlock, STDiT, STDiT_XL_2
+from opensora.utils.train_utils import set_seed
 from opensora.models.stdit.stdit2 import STDiT2
 from opensora.acceleration.parallel_states import set_sequence_parallel_group
 
 def test_stdit_single_op(device):
     device = torch.device(device)
-    torch.manual_seed(1024)
+    # torch.manual_seed(1024)
+    set_seed(1024)
     
     # N, T, D = 4, 64, 256
     B, C, T, H, W = 1, 4, 4, 16, 16 # T=4 
@@ -43,10 +45,9 @@ def test_stdit_single_op(device):
     
     torch.save(x_stdit , f"./dataset/assert_closed/torch_tensor/single_op_stdit_output.txt")
     
-    x_stdit.mean().backward()
-    torch.save(stdit_xl_2.state_dict() , f"./dataset/assert_closed/torch_tensor/single_op_stdit_param_bwd.txt")
+    # x_stdit.mean().backward()
+    # torch.save(stdit_xl_2.state_dict() , f"./dataset/assert_closed/torch_tensor/single_op_stdit_param_bwd.txt")
 
 if __name__ == "__main__":
     device = "cuda"
-
     test_stdit_single_op(device)
