@@ -73,8 +73,6 @@ def test_t5_single_op():
     t5_embs, t5_masks = t5(input)
     torch.save(t5_embs , f"./dataset/assert_closed/torch_tensor/single_op_t5_output_embs.txt")
     torch.save(t5_masks , f"./dataset/assert_closed/torch_tensor/single_op_t5_output_masks.txt")
-    
-    
 
 
 def test_t5_encoder():

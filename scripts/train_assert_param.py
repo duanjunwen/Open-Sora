@@ -302,7 +302,8 @@ def main():
                     # Prepare visual inputs
                     x = vae.encode(x)  # [B, C, T, H/P, W/P]
                     # Prepare text inputs
-                    model_args = text_encoder.encode(y)
+                    # model_args = text_encoder.encode(y)
+                    model_args = text_encoder.forward(y)
                 
                 # Assert 6: assert vae output
                 torch.save(x, f"./dataset/assert_closed/torch_tensor/step{epoch * num_steps_per_epoch + step}_vae_output.txt")
