@@ -10,6 +10,7 @@ import thop
 # import numpy as np
 import torch.distributed as dist
 # import wandb
+import colossalai
 from colossalai.booster import Booster
 from colossalai.booster.plugin import LowLevelZeroPlugin
 from colossalai.booster.plugin import TorchDDPPlugin
@@ -140,7 +141,6 @@ def main():
     else:
         raise ValueError(f"Unknown plugin {cfg.plugin}")
     booster = Booster(plugin=plugin)
-
     
     # ======================================================
     # 3. build dataset and dataloader
@@ -237,6 +237,7 @@ def main():
         hidden_size=model.hidden_size,
         vocab_size=text_encoder.output_dim,
         max_seq_length=512,
+        ignore_steps=1,
         num_steps=10, # epoch * steps 
         use_torch_profiler=False,
         # use_torch_profiler=True,
@@ -313,6 +314,7 @@ def main():
             for step, batch in pbar:
                 x = batch.pop("video").to(device, dtype)  # [B, C, T, H, W]
                 y = batch.pop("text")
+                
                 # Visual and text encoding
                 with torch.no_grad():
                     # Prepare visual inputs

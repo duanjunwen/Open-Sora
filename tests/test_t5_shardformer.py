@@ -5,9 +5,10 @@ from copy import deepcopy
 import colossalai
 import torch
 import torch_musa
+from opensora.utils.train_utils import set_seed
 from colossalai.shardformer import ShardConfig, ShardFormer
 from colossalai.testing import spawn
-
+from torch.testing import assert_close
 from opensora.acceleration.shardformer.policy.t5_encoder import T5EncoderPolicy
 from opensora.models.text_encoder.t5 import T5Embedder
 
@@ -133,10 +134,40 @@ def run_linear_flops(rank, world_size, port):
     print(flops, params)
 
 
+# TODO: assert t5 input & output and param init; (no param bwd)
+def test_t5_single_op():
+    set_seed(1024)
+    pretrain_path = "./pretrained_models/t5_ckpts/t5-v1_1-xxl"
+    t5 = T5Embedder(device="musa", cache_dir=None, from_pretrained=pretrain_path, torch_dtype=torch.float16)
+    input = ["Who is the best player in the history of NBA?", "How to study computer science?"]
+    t5_embs, t5_masks = t5(input)
+    torch.save(t5_embs , f"./dataset/assert_closed/musa_tensor/single_op_t5_output_embs.txt")
+    torch.save(t5_masks , f"./dataset/assert_closed/musa_tensor/single_op_t5_output_masks.txt")
+
+
+def assert_t5_single_op():
+    # assert output embs
+    model_output_musa = torch.load(f"./dataset/assert_closed/musa_tensor/single_op_t5_output_embs.txt", map_location=torch.device('musa'))
+    model_output_torch = torch.load(f"./dataset/assert_closed/torch_tensor/single_op_t5_output_embs.txt", map_location=torch.device('musa'))
+    assert_close(model_output_musa, model_output_torch)
+    print(f"t5 output embs assert close pass;")
+    
+    # assert output masks
+    model_output_musa = torch.load(f"./dataset/assert_closed/musa_tensor/single_op_t5_output_masks.txt", map_location=torch.device('musa'))
+    model_output_torch = torch.load(f"./dataset/assert_closed/torch_tensor/single_op_t5_output_masks.txt", map_location=torch.device('musa'))
+    print(model_output_musa)
+    assert_close(model_output_musa, model_output_torch)
+    print(f"t5 output masks assert close pass;")
+    
+    
 def test_t5_encoder():
-    spawn(run_t5_encoder)
+    # spawn(run_t5_encoder)
     # spawn(run_t5_flops)
     # spawn(run_linear_flops)
+    # test_t5_single_op()
+    # test_t5_single_op()
+    assert_t5_single_op()
+    
 
 if __name__ == "__main__":
     test_t5_encoder()

@@ -1,14 +1,17 @@
+from contextlib import nullcontext
 from copy import deepcopy
-from datetime import timedelta
+from datetime import timedelta, datetime
 from pprint import pprint
 # import thop
 
-import random
-import numpy as np
 import torch
 import torch_musa
+import pandas as pd
+import thop
+# import numpy as np
 import torch.distributed as dist
 # import wandb
+import colossalai
 from colossalai.booster import Booster
 from colossalai.booster.plugin import LowLevelZeroPlugin
 from colossalai.booster.plugin import TorchDDPPlugin
@@ -16,12 +19,12 @@ from colossalai.booster.plugin import TorchFSDPPlugin
 from colossalai.cluster import DistCoordinator
 from colossalai.nn.optimizer import HybridAdam
 # from torch.optim import Adam, AdamW
-from opensora.utils.train_utils import set_seed
-from colossalai.utils import get_current_device
+from colossalai.utils import get_current_device, set_seed
 from tqdm import tqdm
 import functools
 from functools import partial
 
+from performance_evaluator import PerformanceEvaluator
 from opensora.acceleration.checkpoint import set_grad_checkpoint
 from opensora.acceleration.parallel_states import (
     get_data_parallel_group,
@@ -52,8 +55,6 @@ def register_hooks(module):
         # print(f"Grad output {grad_output} type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
         # print(f"Grad input type: {type(grad_input)}; len: {len(grad_input)}; shape {grad_input[0].shape}\n")
         # print(f"Grad output type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
-        torch.save(grad_input, f"./dataset/assert_closed/{module._name}_grad_input.txt")
-        torch.save(grad_output, f"./dataset/assert_closed/{module._name}_grad_output.txt")
 
     def bwd_pre_hook(module, grad_output):
         torch.musa.synchronize()
@@ -62,7 +63,8 @@ def register_hooks(module):
         # print(f"Grad output type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
     
     module.register_backward_hook(bwd_hook)
-    # module.register_full_backward_pre_hook(bwd_pre_hook)
+    module.register_full_backward_pre_hook(bwd_pre_hook)
+    
     
 class ProfileModule(torch.nn.Module):
 	def __init__(self, module, fn='encode'):
@@ -140,7 +142,6 @@ def main():
     else:
         raise ValueError(f"Unknown plugin {cfg.plugin}")
     booster = Booster(plugin=plugin)
-
     
     # ======================================================
     # 3. build dataset and dataloader
@@ -187,15 +188,10 @@ def main():
         model_max_length=text_encoder.model_max_length,
         dtype=dtype,
     )
-    
-    
-    
     model_numel, model_numel_trainable = get_model_numel(model)
     logger.info(
         f"Trainable model params: {format_numel_str(model_numel_trainable)}, Total model params: {format_numel_str(model_numel)}"
     )
-    
-    
 
     # 4.2. create ema
     ema = deepcopy(model).to(torch.float32).to(device)
@@ -217,6 +213,12 @@ def main():
         adamw_mode=True,
     )
     
+    # optimizer = Adam(
+    #     filter(lambda p: p.requires_grad, model.parameters()),
+    #     lr=cfg.lr,
+    #     weight_decay=0,
+    # )
+    
     lr_scheduler = None
 
     # 4.6. prepare for training
@@ -228,6 +230,20 @@ def main():
     if cfg.mask_ratios is not None:
         mask_generator = MaskGenerator(cfg.mask_ratios)
     
+    # 4.7. initialize Evaluator
+    Evaluator = functools.partial(
+        PerformanceEvaluator,
+        model_numel=model_numel,
+        num_layers=model.num_heads,
+        hidden_size=model.hidden_size,
+        vocab_size=text_encoder.output_dim,
+        max_seq_length=512,
+        num_steps=10, # epoch * steps 
+        use_torch_profiler=False,
+        # use_torch_profiler=True,
+        # torch_profiler_path=f"./profiler/{plugin}",
+        # ignore_steps=2,
+    )
     
     # =======================================================
     # 5. boost model for distributed training with colossalai
@@ -273,34 +289,12 @@ def main():
         dataloader.sampler.set_start_index(sampler_start_idx)
     model_sharding(ema)
     # 6.2. training loop
-
+    # performance_evaluator = Evaluator(weight_memory=model_numel)
+    # performance_evaluator.on_fit_start()
     for name, module in model.named_modules(prefix="stdit"):
         module._name = name
     
-    
-    # TODO: assert vae, text encoder, stdit 
-    
-    # # T5
-    # for name, param in text_encoder.t5.model.named_parameters():
-    #     print(f"{name} param shape {param.shape}\n param\n {param}\n") 
-    #     break
-    
-    # Assert 1: save vae init
-    torch.save(vae.state_dict(), f"./dataset/assert_closed/musa_tensor/vae_param_init.txt")
-    # # load vae
-    # vae.load_state_dict(torch.load(f"./dataset/assert_closed/{vae.__class__.__name__}_init.txt"))
-    
-    # Assert 2: save t5
-    # torch.save(text_encoder.state_dict(), f"./dataset/assert_closed/{text_encoder.__class__.__name__}_init.txt")
-    
-    # Assert 3: save stdit init
-    torch.save(model.state_dict(), f"./dataset/assert_closed/musa_tensor/stdit_param_init.txt")
-    
-    # Assert 4: save optim state
-    torch.save(optimizer.state_dict(), f"./dataset/assert_closed/musa_tensor/optim_state_init.txt")
-    # optimizer.load_state_dict(torch.load(f"./dataset/assert_closed/{optimizer.__class__.__name__}_init.txt"))
-    
-    # loss_list = list()
+    loss_list = list()
     # model.apply(register_hooks)
     for epoch in range(start_epoch, cfg.epochs):
         if cfg.dataset.type == "VideoTextDataset":
@@ -316,33 +310,26 @@ def main():
             initial=start_step,
             total=num_steps_per_epoch,
         ) as pbar:
+            # performance_evaluator.start_new_iter()
             for step, batch in pbar:
-                # TODO: In each step assert: vae input, vae output, t5 input, t5 output, stdit grad
                 x = batch.pop("video").to(device, dtype)  # [B, C, T, H, W]
                 y = batch.pop("text")
+                B = x.shape[0]
                 
-                # Assert 5: assert vae input
-                torch.save(x, f"./dataset/assert_closed/musa_tensor/step{epoch * num_steps_per_epoch + step}_vae_input.txt")
                 
-                # Assert 6: assert t5 input
-                torch.save(y, f"./dataset/assert_closed/musa_tensor/step{epoch * num_steps_per_epoch + step}_t5_input.txt")
-
+                
                 # Visual and text encoding
                 with torch.no_grad():
                     # Prepare visual inputs
+                    # performance_evaluator.before_video_encode()
                     x = vae.encode(x)  # [B, C, T, H/P, W/P]
                     # Prepare text inputs
+                    # performance_evaluator.before_text_encode()
                     # model_args = text_encoder.encode(y)
                     model_args = text_encoder.forward(y)
-                
-                # Assert 6: assert vae output
-                torch.save(x, f"./dataset/assert_closed/musa_tensor/step{epoch * num_steps_per_epoch + step}_vae_output.txt")
-                # Assert 8: assert t5 output
-                torch.save(model_args, f"./dataset/assert_closed/musa_tensor/step{epoch * num_steps_per_epoch + step}_t5_output.txt")
-                
+
                 
                 # Mask
-                # print(f"model_args {model_args}")
                 if cfg.mask_ratios is not None:
                     mask = mask_generator.get_masks(x)
                     model_args["x_mask"] = mask
@@ -351,33 +338,44 @@ def main():
                 # Video info
                 for k, v in batch.items():
                     model_args[k] = v.to(device, dtype)
-                
-                
+                    
                 # Diffusion
                 t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
-                loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
-                # Backward & update
-                loss = loss_dict["loss"].mean()
-                # Assert 9: assert loss
-                logger.info(f"loss: {loss}\n")
+                # print(f"x shape {x.shape}, t shape {t.shape} y {model_args['y'].shape} mask {model_args['mask'].shape}")
                 
-                booster.backward(loss=loss, optimizer=optimizer)
                 
-                # Assert 10: assert stdit grad (in model.apply(register_hooks))
-
-                optimizer.step()
-                optimizer.zero_grad()
+                is_update_iter = ((step + 1) % cfg.grad_accm == 0) # only update param in last microbatch
+                # fwd_bwd_ctx = booster.no_sync(model=model, optimizer=optimizer) if (not is_update_iter) else nullcontext()
+            
+                # iter mircobatch
+                for i in range(B):
+                    curr_x = x[i].view(1, x.shape[1], x.shape[2], x.shape[3], x.shape[4])
+                    curr_t = t[i].view(1)
+                    curr_model_args = {}
+                    curr_model_args['y'] = model_args['y'][i].view(1, model_args['y'].shape[1], model_args['y'].shape[2], model_args['y'].shape[3])
+                    curr_model_args['mask'] = model_args['mask'][i].view(1, model_args['mask'].shape[1])
+                    loss_dict = scheduler.training_losses(model, curr_x, curr_t, curr_model_args, mask=mask)
+                    # Backward & update
+                    loss = loss_dict["loss"].mean()
+                    logger.info(f"loss: {loss}\n")
+                    booster.backward(loss=loss, optimizer=optimizer)
+                    
+                    # optim step at last minibatch
+                    if i + 1 == B:
+                        # TODO: zero2 all gather grad
+                        optimizer.step()
+                        optimizer.zero_grad()
                 
-                # Assert 11: assert stdit param
-                torch.save(model.state_dict(), f"./dataset/assert_closed/musa_tensor/step{epoch * num_steps_per_epoch + step}_stdit_param_step.txt")
-                # Assert 12: assert optim state    
-                torch.save(optimizer.state_dict(), f"./dataset/assert_closed/musa_tensor/step{epoch * num_steps_per_epoch + step}_optim_state_step.txt")
                 
                 # Update EMA
                 update_ema(ema, model.module, optimizer=optimizer)
                 
                 # Log loss values:
                 all_reduce_mean(loss)
+                
+                if coordinator.is_master():
+                    loss_list.append(float(loss.to('cpu')))
+                    
                 running_loss += loss.item()
                 global_step = epoch * num_steps_per_epoch + step
                 log_step += 1
@@ -422,9 +420,8 @@ def main():
                     logger.info(
                         f"Saved checkpoint at epoch {epoch} step {step + 1} global_step {global_step + 1} to {exp_dir}"
                     )
-                
-                # assert only one step now 
-                break
+                    # performance_evaluator.end_iter(input_ids=torch.empty(cfg.batch_size, cfg.epochs))
+                    # performance_evaluator.start_new_iter()
 
         # the continue epochs are not resumed, so we need to reset the sampler start index and start step
         if cfg.dataset.type == "VideoTextDataset":
@@ -433,11 +430,10 @@ def main():
             dataloader.batch_sampler.set_epoch(epoch + 1)
             print("Epoch done, recomputing batch sampler")
         start_step = 0
-
-
-    # df = pd.DataFrame(loss_list)
-    # df.to_csv("./loss_curve.csv",index=False)
-    
+    # performance_evaluator.on_fit_end()
+    if coordinator.is_master():
+        df = pd.DataFrame(loss_list)
+        df.to_csv(f"./loss_curve/loss_curve_{datetime.now()}.csv",index=False)
 
 if __name__ == "__main__":
     main()

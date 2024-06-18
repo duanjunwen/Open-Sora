@@ -14,7 +14,8 @@ from colossalai.booster.plugin import LowLevelZeroPlugin
 from opensora.models.stdit.stdit import STDiTBlock, STDiT, STDiT_XL_2
 from opensora.models.stdit.stdit2 import STDiT2
 from opensora.acceleration.parallel_states import set_sequence_parallel_group
-
+from opensora.utils.train_utils import set_seed
+# from .test_assert_closed import assert_tensor, assert_param
 
 def setup_param_groups(model: nn.Module) -> list:
     no_decay = ["bias", "LayerNorm.weight"]
@@ -345,6 +346,65 @@ def test_stdit_xl_2_booster_step(device):
     # print(f"Param after step:\n {model_param}")
   
 
+def test_stdit_single_op(device):
+    device = torch.device(device)
+    # torch.manual_seed(1024)
+    set_seed(1024)
+    # N, T, D = 4, 64, 256
+    B, C, T, H, W = 1, 4, 4, 16, 16 # T=4 
+    N_token = 120
+    caption_channels = 4096
+    device = torch.device(device)
+    dtype = torch.float32
+    
+    # stdit_xl_2 = STDiT_XL_2(from_pretrained="/home/dist/hpcai/duanjunwen/Open-Sora/pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth").to(device)
+    # stdit_xl_2 = STDiT_XL_2(from_pretrained="./pretrained_models/PixArt-alpha/PixArt-XL-2-512x512.pth").to(device)
+    stdit_xl_2 = STDiT_XL_2(from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth").to(device)
+    
+    x = torch.randn(B, C, T, H, W, dtype=dtype).to(device)  # (B, C, T, H, W)
+    x.requires_grad = True
+    y = torch.randn(B, 1, N_token, 4096, dtype=dtype).to(device)   #  [B, caption_channels=512]
+    timestep = torch.randn(B, dtype=dtype).to(device) #  [B, ]
+    mask = torch.randn(B, N_token, dtype=dtype).to(device)  # [B, N_token] # Method 1
+    # mask = torch.randn(256, N_token, dtype=dtype).to(device)  # [B, N_token] # Method 2
+    # mask = None
+    torch.save(x , f"./dataset/assert_closed/musa_tensor/single_op_stdit_input.txt")
+    torch.save(stdit_xl_2.state_dict() , f"./dataset/assert_closed/musa_tensor/single_op_stdit_param_init.txt")
+    
+    x_stdit = stdit_xl_2(x=x, timestep=timestep, y=y, mask=mask)
+    
+    torch.save(x_stdit , f"./dataset/assert_closed/musa_tensor/single_op_stdit_output.txt")
+    
+    # x_stdit.mean().backward()
+    # torch.save(stdit_xl_2.state_dict() , f"./dataset/assert_closed/musa_tensor/single_op_stdit_param_bwd.txt")
+
+
+def assert_stdit_single_op():
+    # assert input
+    model_input_musa = torch.load(f"./dataset/assert_closed/musa_tensor/single_op_stdit_input.txt", map_location=torch.device('musa'))
+    model_input_torch = torch.load(f"./dataset/assert_closed/torch_tensor/single_op_stdit_input.txt", map_location=torch.device('musa'))
+    assert_close(model_input_musa, model_input_torch)
+    print(f"stdit input assert close pass;")
+    
+    # assert model param init
+    model_param_init_musa = torch.load(f"./dataset/assert_closed/musa_tensor/single_op_stdit_param_init.txt", map_location=torch.device('musa'))
+    model_param_init_torch = torch.load(f"./dataset/assert_closed/torch_tensor/single_op_stdit_param_init.txt", map_location=torch.device('musa'))
+    assert_close(model_param_init_musa, model_param_init_torch)
+    print(f"stdit param init assert close pass;")
+    
+    # assert output
+    model_output_musa = torch.load(f"./dataset/assert_closed/musa_tensor/single_op_stdit_output.txt", map_location=torch.device('musa'))
+    model_output_torch = torch.load(f"./dataset/assert_closed/torch_tensor/single_op_stdit_output.txt", map_location=torch.device('musa'))
+    assert_close(model_output_musa, model_output_torch)
+    print(f"stdit output assert close pass;")
+    
+    # assert model param bwd
+    model_param_bwd_musa = torch.load(f"./dataset/assert_closed/musa_tensor/single_op_stdit_param_bwd.txt", map_location=torch.device('musa'))
+    model_param_bwd_torch = torch.load(f"./dataset/assert_closed/torch_tensor/single_op_stdit_param_bwd.txt", map_location=torch.device('musa'))
+    assert_close(model_param_bwd_musa, model_param_bwd_torch)
+    print(f"stdit param bwd assert close pass;")
+    
+
 if __name__ == "__main__":
     device = "musa"
 
@@ -356,4 +416,6 @@ if __name__ == "__main__":
     
     # test_stdit_xl_2(device)
     # test_stdit_xl_2_step(device)
-    test_stdit_xl_2_booster_step(device)
+    # test_stdit_xl_2_booster_step(device)
+    # test_stdit_single_op(device)
+    assert_stdit_single_op()

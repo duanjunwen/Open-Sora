@@ -45,7 +45,7 @@ class STDiTBlock(nn.Module):
         self.hidden_size = hidden_size
         self.enable_flashattn = enable_flashattn
         self._enable_sequence_parallelism = enable_sequence_parallelism
-
+        
         if enable_sequence_parallelism:
             self.attn_cls = SeqParallelAttention
             self.mha_cls = SeqParallelMultiHeadCrossAttention

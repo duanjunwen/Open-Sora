@@ -16,10 +16,10 @@ grad_checkpoint = True
 # plugin = "ddp"
 # plugin = "zero2"
 plugin = "zero2-seq"
-sp_size = 1
+# sp_size = 1
 # sp_size = 2
 # sp_size = 4
-# sp_size = 8
+sp_size = 8
 
 # Define model
 model = dict(
@@ -53,14 +53,15 @@ seed = 42
 outputs = "outputs"
 wandb = False
 
-epochs = 1
+epochs =  70  
 log_every = 10
-ckpt_every = 100
+ckpt_every = 300
 load = None
 
-batch_size = 4
+batch_size = 8
 lr = 2e-5
 grad_clip = 1.0
+grad_accm = 2
 
 random_dataset = False
 

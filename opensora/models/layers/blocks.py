@@ -366,6 +366,7 @@ class SeqParallelMultiHeadCrossAttention(MultiHeadCrossAttention):
         q = self.q_linear(x).view(B, -1, self.num_heads, self.head_dim)
         kv = self.kv_linear(cond).view(B, -1, 2, self.num_heads, self.head_dim)
         k, v = kv.unbind(2)
+        # print(f"Seq atten Before split q shape {q.shape}, k shape {k.shape}, mask shape {mask.shape}")
 
         # apply all_to_all to gather sequence and split attention heads
         q = all_to_all(q, sp_group, scatter_dim=2, gather_dim=1)
@@ -376,6 +377,7 @@ class SeqParallelMultiHeadCrossAttention(MultiHeadCrossAttention):
         q = q.view(1, -1, self.num_heads // sp_size, self.head_dim)
         k = k.view(1, -1, self.num_heads // sp_size, self.head_dim)
         v = v.view(1, -1, self.num_heads // sp_size, self.head_dim)
+        # print(f"Seq atten After split q shape {q.shape}, k shape {k.shape}, mask shape {mask.shape}")
 
         # compute attention
         attn_bias = None
