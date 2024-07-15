@@ -7,11 +7,11 @@ import torch
 import torch_musa
 import pandas as pd
 import thop
-import time
 from calflops import calculate_flops
 # import numpy as np
 import torch.distributed as dist
 # import wandb
+from wonderwords import RandomWord, RandomSentence
 import colossalai
 from colossalai.booster import Booster
 from colossalai.booster.plugin import LowLevelZeroPlugin
@@ -24,6 +24,7 @@ from colossalai.utils import get_current_device, set_seed
 from tqdm import tqdm
 import functools
 from functools import partial
+from transformers import AutoTokenizer, T5EncoderModel
 
 from performance_evaluator import PerformanceEvaluator
 from opensora.acceleration.checkpoint import set_grad_checkpoint
@@ -42,7 +43,7 @@ from opensora.utils.config_utils import (
     parse_configs,
     save_training_config,
 )
-from opensora.utils.misc import all_reduce_mean, format_numel_str,format_numel, get_model_numel, requires_grad, to_torch_dtype
+from opensora.utils.misc import all_reduce_mean, format_numel, format_numel_str, get_model_numel, requires_grad, to_torch_dtype
 from opensora.utils.train_utils import MaskGenerator, update_ema
 from opensora.models.stdit.stdit import STDiT, STDiTBlock
 from opensora.models.stdit.stdit2 import STDiT2, STDiT2Block
@@ -50,8 +51,6 @@ from opensora.models.stdit.stdit2 import STDiT2, STDiT2Block
 def register_hooks(module):
     def bwd_hook(module, grad_input, grad_output):
         torch.musa.synchronize()
-        runtime = time.time() - module.backward_start_time
-        # print(f"stdit {module._name} bwd runtime {runtime * 1000} ms")
         # if 'proj' in module._name:
         #     print(f"{module._name} {module.dtype}")
         # print(f"{module._name} post hook\n")
@@ -62,14 +61,12 @@ def register_hooks(module):
 
     def bwd_pre_hook(module, grad_output):
         torch.musa.synchronize()
-        module.backward_start_time=time.time()
         # print(f"{module._name} pre hook\n")
         # print(f"Grad output {grad_output} type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
         # print(f"Grad output type: {type(grad_output)}; len: {len(grad_output)}; shape {grad_output[0].shape}\n")
     
-    module.register_full_backward_pre_hook(bwd_pre_hook)
     module.register_backward_hook(bwd_hook)
-    # module.register_full_backward_pre_hook(bwd_pre_hook)
+    module.register_full_backward_pre_hook(bwd_pre_hook)
     
     
 class ProfileModule(torch.nn.Module):
@@ -181,7 +178,18 @@ def main():
     # 4. build model
     # ======================================================
     # 4.1. build model
-    text_encoder = build_module(cfg.text_encoder, MODELS, device=device)
+    text_encoder_ = build_module(cfg.text_encoder, MODELS, device=device)
+    tokenizer = AutoTokenizer.from_pretrained(
+        "./pretrained_models/t5_ckpts/t5-v1_1-xxl",
+        cache_dir=None,
+        local_files_only=False,
+    )
+    text_encoder = T5EncoderModel.from_pretrained(
+        "./pretrained_models/t5_ckpts/t5-v1_1-xxl",
+        cache_dir=None,
+        local_files_only=False,
+    )
+    
     vae = build_module(cfg.vae, MODELS)
     input_size = (dataset.num_frames, *dataset.image_size)
     latent_size = vae.get_latent_size(input_size)
@@ -190,14 +198,13 @@ def main():
         MODELS,
         input_size=latent_size,
         in_channels=vae.out_channels,
-        caption_channels=text_encoder.output_dim,
-        model_max_length=text_encoder.model_max_length,
+        caption_channels=text_encoder_.output_dim,
+        model_max_length=text_encoder_.model_max_length,
         dtype=dtype,
     )
     model_numel, model_numel_trainable = get_model_numel(model)
     t5_numel, t5_numel_trainable = get_model_numel(text_encoder)
     vae_numel, vae_numel_trainable = get_model_numel(vae)
-
     logger.info(
         f"Trainable model params: {format_numel_str(model_numel_trainable)}, Total model params: {format_numel_str(model_numel)}"
     )
@@ -250,11 +257,10 @@ def main():
         model_numel=model_numel,
         num_layers=model.num_heads,
         hidden_size=model.hidden_size,
-        vocab_size=text_encoder.output_dim,
+        vocab_size=text_encoder_.output_dim,
         max_seq_length=512,
-        ignore_steps=0,
-        # num_steps=cfg.benchmark_num_steps, # epoch * steps 
-        num_steps=cfg.epochs * 11, # epoch * steps 
+        ignore_steps=2,
+        num_steps=cfg.benchmark_num_steps, # epoch * steps 
         use_torch_profiler=False,
         cfg=cfg,
         # num_steps=22, # epoch * steps 
@@ -279,11 +285,16 @@ def main():
         num_steps_per_epoch = dataloader.batch_sampler.get_num_batch() // dist.get_world_size()
     else:
         num_steps_per_epoch = len(dataloader)
+    
     # =======================================================
-    # 6. training loop
+    # 6. test flops
+    # =======================================================
+    
+    # =======================================================
+    # 7. training loop
     # =======================================================
 
-    start_epoch = start_step = log_step = sampler_start_idx = acc_step = 0
+    start_epoch = start_step = log_step = sampler_start_idx = acc_step = global_step = 0
     running_loss = 0.0
     sampler_to_io = dataloader.batch_sampler if cfg.dataset.type == "VariableVideoTextDataset" else None
     # 6.1. resume training
@@ -314,101 +325,103 @@ def main():
     
     loss_list = list()
     # model.apply(register_hooks)
-    # if cfg.random_dataset:
-    #     num_steps_per_epoch = cfg.benchmark_num_steps
+
+    if cfg.random_dataset:
+        num_steps_per_epoch = cfg.benchmark_num_steps
+    s = RandomSentence()
     for epoch in range(start_epoch, cfg.epochs):
         if cfg.dataset.type == "VideoTextDataset":
             dataloader.sampler.set_epoch(epoch)
         dataloader_iter = iter(dataloader)
         logger.info(f"Beginning epoch {epoch}...")
-        with tqdm(
-            enumerate(dataloader_iter, start=start_step),
-            desc=f"Epoch {epoch}",
-            disable=not coordinator.is_master(),
-            initial=start_step,
-            total=num_steps_per_epoch,
-        ) as pbar:
-            performance_evaluator.start_new_iter()
-            for step, batch in pbar:
-                x = batch.pop("video").to(device, dtype)  # [B, C, T, H, W]
-                y = batch.pop("text")
+        performance_evaluator.start_new_iter()
+        for step in range(num_steps_per_epoch):
+            x = torch.randn(cfg.batch_size, 3, cfg.dataset["num_frames"], cfg.dataset["image_size"][0], cfg.dataset["image_size"][1], dtype=dtype).to(device)  # (B, C, T, H, W) 
+            y = [s.simple_sentence() for _ in range(cfg.batch_size)]    
                 
-                # Visual and text encoding
-                with torch.no_grad():
-                    # Prepare visual inputs
-                    performance_evaluator.before_video_encode()
-                    x = vae.encode(x)  # [B, C, T, H/P, W/P]
-                    # Prepare text inputs
-                    performance_evaluator.before_text_encode()
-                    model_args = text_encoder.forward(y)   
-                # Mask
-                if cfg.mask_ratios is not None:
-                    mask = mask_generator.get_masks(x)
-                    model_args["x_mask"] = mask
-                else:
-                    mask = None
-                # Video info
-                for k, v in batch.items():
-                    if k not in ['video', 'text', 'model_arg']:
-                        # print(f" key {k} val {v}")
-                        model_args[k] = v.to(device, dtype)
+            # Visual and text encoding
+            with torch.no_grad():
+                
+                inputs = tokenizer(
+                                y,
+                                max_length=cfg.text_encoder['model_max_length'],
+                                padding="max_length",
+                                truncation=True,
+                                return_attention_mask=True,
+                                add_special_tokens=True,
+                                return_tensors="pt",
+                )
+                t5_flops, t5_macs, t5_params = calculate_flops(model=text_encoder,kwargs=inputs)
+                print(f"t5 flops {t5_flops}, t5_macs {t5_macs}, t5_params {t5_params}")
+                x_encoder_input = torch.randn(cfg.batch_size, 3, cfg.dataset["num_frames"], cfg.dataset["image_size"][0], cfg.dataset["image_size"][1], dtype=dtype).to(device)
+                vae_encode = ProfileModule(module=vae, fn='encode')
+                vae_flops, vae_macs, vae_params = calculate_flops(model=vae_encode,args=[x_encoder_input])
+                print(f"vae flops {vae_flops}, vae_macs {vae_macs}, vae_params {vae_params}")
+            
+                
+                # Prepare visual inputs
+                performance_evaluator.before_video_encode()
+                x = vae.encode(x)  # [B, C, T, H/P, W/P]
+                # Prepare text inputs
+                performance_evaluator.before_text_encode()
+                model_args = text_encoder_.forward(y)
+                         
+            # Mask
+            if cfg.mask_ratios is not None:
+                mask = mask_generator.get_masks(x)
+                model_args["x_mask"] = mask
+            else:
+                mask = None
+            # Video info
+            # for k, v in batch.items():
+            #     if k not in ['video', 'text']:
+            #         model_args[k] = v.to(device, dtype)
                     
-                # Diffusion
-                t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
-                if cfg.model["type"] == "STDiT2-XL/2":
-                    model_args['num_frames'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
-                    model_args['height'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
-                    model_args['width'] = torch.randn(cfg.batch_size, dtype=dtype).to(device)
-                    model_args['ar'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
-                    model_args['fps'] = torch.randn(cfg.batch_size, dtype=dtype).to(device)
-                performance_evaluator.before_forward()
-                loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
-                # Backward & update
-                loss = loss_dict["loss"].mean()
-                logger.info(f"loss: {loss}\n")
+            # Diffusion
+            t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
+            
+            # calculate_flops
+            # if global_step == 0:
+            if cfg.model["type"] == "STDiT-XL/2":
+                stdit_flops, stdit_macs, stdit_params = calculate_flops(model=model,args=[x, t ,model_args['y'], model_args['mask']], include_backPropagation=True)
+            elif cfg.model["type"] == "STDiT2-XL/2":
+                model_args['num_frames'] = torch.randn(cfg.dataset["num_frames"], dtype=dtype).to(device) 
+                model_args['height'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
+                model_args['width'] = torch.randn(cfg.batch_size, dtype=dtype).to(device)
+                model_args['ar'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
+                model_args['fps'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
+                stdit_flops, stdit_macs, stdit_params = calculate_flops(model=model,args=[x, t , model_args['y'], model_args['mask'], model_args["x_mask"], model_args['num_frames'], model_args['height'], model_args['width'], model_args['ar'], model_args['fps']], include_backPropagation=True)
+            print(f"stdit_flops {stdit_flops} macs {stdit_macs} params {stdit_params}")
                 
-                performance_evaluator.before_backward()
-                booster.backward(loss=loss, optimizer=optimizer)
-                performance_evaluator.before_optimizer_update()
-                optimizer.step()
-                optimizer.zero_grad()
+            performance_evaluator.before_forward()
+            loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
+            # Backward & update
+            loss = loss_dict["loss"].mean()
+            logger.info(f"loss: {loss}\n")
                 
-                # Update EMA
-                update_ema(ema, model.module, optimizer=optimizer)
+            performance_evaluator.before_backward()
+            booster.backward(loss=loss, optimizer=optimizer)
+            performance_evaluator.before_optimizer_update()
+            optimizer.step()
+            optimizer.zero_grad()
                 
-                # Log loss values:
-                all_reduce_mean(loss)
+            # Update EMA
+            update_ema(ema, model.module, optimizer=optimizer)
                 
-                if coordinator.is_master():
-                    loss_list.append(float(loss.to('cpu')))
+            # Log loss values:
+            all_reduce_mean(loss)
+                
+            if coordinator.is_master():
+                loss_list.append(float(loss.to('cpu')))
                     
-                running_loss += loss.item()
-                global_step = epoch * num_steps_per_epoch + step
-                log_step += 1
-                acc_step += 1
+            running_loss += loss.item()
+            global_step = epoch * num_steps_per_epoch + step
+            log_step += 1
+            acc_step += 1
 
-                # Log to tensorboard
-                if coordinator.is_master() and (global_step + 1) % cfg.log_every == 0:
-                    avg_loss = running_loss / log_step
-                    pbar.set_postfix({"loss": avg_loss, "step": step, "global_step": global_step})
-                    running_loss = 0
-                    log_step = 0
-                    writer.add_scalar("loss", loss.item(), global_step)
-                    if cfg.wandb:
-                        wandb.log(
-                            {
-                                "iter": global_step,
-                                "epoch": epoch,
-                                "loss": loss.item(),
-                                "avg_loss": avg_loss,
-                                "acc_step": acc_step,
-                            },
-                            step=global_step,
-                        )
-
-                # Save checkpoint
-                if cfg.ckpt_every > 0 and (global_step + 1) % cfg.ckpt_every == 0:
-                    save(
+            # Save checkpoint
+            if cfg.ckpt_every > 0 and (global_step + 1) % cfg.ckpt_every == 0:
+                save(
                         booster,
                         model,
                         ema,
@@ -423,11 +436,11 @@ def main():
                         ema_shape_dict,
                         sampler=sampler_to_io,
                     )
-                    logger.info(
+                logger.info(
                         f"Saved checkpoint at epoch {epoch} step {step + 1} global_step {global_step + 1} to {exp_dir}"
-                    )
-                performance_evaluator.end_iter(input_ids=torch.empty(cfg.batch_size, cfg.epochs))
-                performance_evaluator.start_new_iter()
+                )
+            performance_evaluator.end_iter(input_ids=torch.empty(cfg.batch_size, cfg.epochs))
+            performance_evaluator.start_new_iter()
 
         # the continue epochs are not resumed, so we need to reset the sampler start index and start step
         if cfg.dataset.type == "VideoTextDataset":
@@ -439,10 +452,9 @@ def main():
         
     if coordinator.is_master():
         df = pd.DataFrame(loss_list)
-        df.to_csv(f"./loss_curve/musa_loss_curve_{datetime.now()}.csv",index=False)
+        df.to_csv(f"./loss_curve/loss_curve_{datetime.now()}.csv",index=False)
 
     performance_evaluator.on_fit_end()
 
-# torchrun --nnodes=1 --nproc_per_node=1 scripts/train_benchmark.py configs/opensora-v1-1/train/16x256x256.py --data-path /home/dist/hpcai/duanjunwen/Open-Sora/dataset/panda_train/meta/meta_clips_caption_cleaned.csv
 if __name__ == "__main__":
     main()

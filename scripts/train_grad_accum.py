@@ -362,7 +362,6 @@ def main():
                     
                     # optim step at last minibatch
                     if i + 1 == B:
-                        # TODO: zero2 all gather grad
                         optimizer.step()
                         optimizer.zero_grad()
                 

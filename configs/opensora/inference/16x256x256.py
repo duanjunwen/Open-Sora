@@ -30,8 +30,8 @@ scheduler = dict(
     cfg_scale=7.0,
     cfg_channel=3,  # or None
 )
-# dtype = "bf16"
-dtype = "fp16"
+dtype = "bf16"
+# dtype = "fp16"
 # dtype = "fp32"
 
 # Condition
@@ -41,4 +41,4 @@ prompt = None  # prompt has higher priority than prompt_path
 # Others
 batch_size = 1
 seed = 42
-save_dir = "./samples/samples/"
+save_dir = "./samples/samples-v1-0/"

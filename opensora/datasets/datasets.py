@@ -29,6 +29,7 @@ class VideoTextDataset(torch.utils.data.Dataset):
         frame_interval=1,
         image_size=(256, 256),
         transform_name="center",
+        t5_offline=False
     ):
         self.data_path = data_path
         self.data = read_file(data_path)
@@ -39,6 +40,10 @@ class VideoTextDataset(torch.utils.data.Dataset):
             "image": get_transforms_image(transform_name, image_size),
             "video": get_transforms_video(transform_name, image_size),
         }
+        self.t5_offline = t5_offline
+        if self.t5_offline:
+            self.model_arg_path = '/'.join(data_path.split('/')[:-1]) + '/meta_clips_caption_cleaned_model_args.pt'
+            self.model_arg_data = torch.load(self.model_arg_path) # {id: {'y':..., 'mask':...,}}
 
     def _print_data_number(self):
         num_videos = 0
@@ -62,6 +67,9 @@ class VideoTextDataset(torch.utils.data.Dataset):
         sample = self.data.iloc[index]
         path = sample["path"]
         text = sample["text"]
+        if self.t5_offline: 
+            text_idx = sample["text_idx"]
+            model_arg = self.model_arg_data[text_idx]
         file_type = self.get_type(path)
 
         if file_type == "video":
@@ -87,7 +95,10 @@ class VideoTextDataset(torch.utils.data.Dataset):
 
         # TCHW -> CTHW
         video = video.permute(1, 0, 2, 3)
-        return {"video": video, "text": text}
+        if self.t5_offline: 
+            return {"video": video, "text": text, "model_arg":model_arg}
+        else:
+            return {"video": video, "text": text}
 
     def __getitem__(self, index):
         for _ in range(10):
@@ -112,10 +123,15 @@ class VariableVideoTextDataset(VideoTextDataset):
         frame_interval=1,
         image_size=None,
         transform_name=None,
+        t5_offline=False,
     ):
-        super().__init__(data_path, num_frames, frame_interval, image_size, transform_name=None)
+        super().__init__(data_path, num_frames, frame_interval, image_size, transform_name, t5_offline)
         self.transform_name = transform_name
+        
         self.data["id"] = np.arange(len(self.data))
+        if self.t5_offline:
+            self.model_arg_path = '/'.join(data_path.split('/')[:-1]) + '/meta_clips_caption_cleaned_model_args.pt'
+            self.model_arg_data = torch.load(self.model_arg_path) # {id: {'y':..., 'mask':...,}}
 
     def get_data_info(self, index):
         T = self.data.iloc[index]["num_frames"]
@@ -130,6 +146,8 @@ class VariableVideoTextDataset(VideoTextDataset):
         sample = self.data.iloc[index]
         path = sample["path"]
         text = sample["text"]
+        text_idx = sample["text_idx"]
+        model_arg = self.model_arg_data[text_idx]
         file_type = self.get_type(path)
         ar = height / width
 
@@ -168,4 +186,27 @@ class VariableVideoTextDataset(VideoTextDataset):
             "width": width,
             "ar": ar,
             "fps": video_fps,
+            "model_arg":model_arg,
         }
+        
+        # if self.t5_offline: 
+        #     return {
+        #         "video": video,
+        #         "text": text,
+        #         "num_frames": num_frames,
+        #         "height": height,
+        #         "width": width,
+        #         "ar": ar,
+        #         "fps": video_fps,
+        #         "model_arg":model_arg,
+        #     }
+        # else:
+        #     return {
+        #         "video": video,
+        #         "text": text,
+        #         "num_frames": num_frames,
+        #         "height": height,
+        #         "width": width,
+        #         "ar": ar,
+        #         "fps": video_fps,
+        #     }

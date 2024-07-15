@@ -33,6 +33,8 @@ from opensora.utils.config_utils import (
 )
 from opensora.utils.misc import all_reduce_mean, format_numel_str, get_model_numel, requires_grad, to_torch_dtype
 from opensora.utils.train_utils import MaskGenerator, update_ema
+from opensora.models.stdit.stdit import STDiT, STDiTBlock
+from opensora.models.stdit.stdit2 import STDiT2, STDiT2Block
 
 
 def register_hooks(module):
@@ -197,7 +199,12 @@ def main():
 
     # 4.6. prepare for training
     if cfg.grad_checkpoint:
-        set_grad_checkpoint(model)
+        set_grad_checkpoint(model, (STDiTBlock, STDiT2Block))
+        num_ckpt_blocks = 0
+        for module in model.modules():
+            if isinstance(module, (STDiTBlock, STDiT2Block)):
+                module.grad_checkpointing = module.grad_checkpointing and num_ckpt_blocks < cfg.num_ckpt_blocks
+                num_ckpt_blocks += module.grad_checkpointing
     model.train()
     update_ema(ema, model, decay=0, sharded=False)
     ema.eval()
@@ -378,7 +385,6 @@ def main():
             dataloader.batch_sampler.set_epoch(epoch + 1)
             print("Epoch done, recomputing batch sampler")
         start_step = 0
-    print("training loop pass")
 
 if __name__ == "__main__":
     main()

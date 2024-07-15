@@ -10,7 +10,9 @@ model = dict(
     enable_flashattn=True,
     enable_layernorm_kernel=True,
     # from_pretrained="PRETRAINED_MODEL",
-    from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth",
+    # from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth",
+    # from_pretrained="./pretrained_models/stdit/OpenSora-STDiT-v2-stage2/"
+    from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-HQ-16x512x512.pth",
 )
 vae = dict(
     type="VideoAutoencoderKL",
@@ -35,4 +37,4 @@ dtype = "bf16"
 batch_size = 2
 seed = 42
 prompt_path = "./assets/texts/t2v_samples.txt"
-save_dir = "./samples/samples/"
+save_dir = "./samples/samples0/"

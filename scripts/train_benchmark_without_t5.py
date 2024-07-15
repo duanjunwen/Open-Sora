@@ -1,15 +1,14 @@
+# #
+# This script preprocess text first
+# #
 from copy import deepcopy
 from datetime import timedelta, datetime
 from pprint import pprint
-# import thop
 
 import torch
 import torch_musa
 import pandas as pd
-import thop
 import time
-from calflops import calculate_flops
-# import numpy as np
 import torch.distributed as dist
 # import wandb
 import colossalai
@@ -23,7 +22,6 @@ from colossalai.nn.optimizer import HybridAdam
 from colossalai.utils import get_current_device, set_seed
 from tqdm import tqdm
 import functools
-from functools import partial
 
 from performance_evaluator import PerformanceEvaluator
 from opensora.acceleration.checkpoint import set_grad_checkpoint
@@ -95,12 +93,7 @@ def main():
     # assert torch.cuda.is_available(), "Training currently requires at least one GPU."
     assert torch.musa.is_available(), "Training currently requires at least one GPU."
     assert cfg.dtype in ["fp32", "fp16", "bf16"], f"Unknown mixed precision {cfg.dtype}"
-    # torch.backends.cuda.enable_flash_sdp(enabled=False) # MUSA only support flash atten dim <= 128; but pretrained has 512
-    # 2.1. colossalai init distributed training
-    # we set a very large timeout to avoid some processes exit early
-    # dist.init_process_group(backend="nccl", timeout=timedelta(hours=24))
     dist.init_process_group(backend="mccl", timeout=timedelta(hours=24))
-    # torch.cuda.set_device(dist.get_rank() % torch.cuda.device_count())
     torch.musa.set_device(dist.get_rank() % torch.musa.device_count())
     set_seed(1024)
     coordinator = DistCoordinator()
@@ -152,6 +145,10 @@ def main():
     # ======================================================
     # 3. build dataset and dataloader
     # ======================================================
+    data_path = cfg.dataset['data_path']
+    model_args_path = '/'.join(data_path.split('/')[:-1]) + '/meta_clips_caption_cleaned_model_args.pt'
+    
+    # meta_clips_caption_cleaned_model_args
     dataset = build_module(cfg.dataset, DATASETS)
     logger.info(f"Dataset contains {len(dataset)} samples.")
     dataloader_args = dict(
@@ -181,7 +178,9 @@ def main():
     # 4. build model
     # ======================================================
     # 4.1. build model
-    text_encoder = build_module(cfg.text_encoder, MODELS, device=device)
+    # text_encoder = build_module(cfg.text_encoder, MODELS, device=device)
+    text_encoder_output_dim = 4096
+    text_encoder_model_max_length = cfg.text_encoder['model_max_length']
     vae = build_module(cfg.vae, MODELS)
     input_size = (dataset.num_frames, *dataset.image_size)
     latent_size = vae.get_latent_size(input_size)
@@ -190,12 +189,13 @@ def main():
         MODELS,
         input_size=latent_size,
         in_channels=vae.out_channels,
-        caption_channels=text_encoder.output_dim,
-        model_max_length=text_encoder.model_max_length,
+        caption_channels=text_encoder_output_dim,
+        model_max_length=text_encoder_model_max_length,
         dtype=dtype,
     )
     model_numel, model_numel_trainable = get_model_numel(model)
-    t5_numel, t5_numel_trainable = get_model_numel(text_encoder)
+    # t5_numel =  4762310656
+    t5_numel =  0
     vae_numel, vae_numel_trainable = get_model_numel(vae)
 
     logger.info(
@@ -222,12 +222,6 @@ def main():
         adamw_mode=True,
     )
     
-    # optimizer = Adam(
-    #     filter(lambda p: p.requires_grad, model.parameters()),
-    #     lr=cfg.lr,
-    #     weight_decay=0,
-    # )
-    
     lr_scheduler = None
 
     # 4.6. prepare for training
@@ -250,11 +244,10 @@ def main():
         model_numel=model_numel,
         num_layers=model.num_heads,
         hidden_size=model.hidden_size,
-        vocab_size=text_encoder.output_dim,
+        vocab_size=text_encoder_output_dim,
         max_seq_length=512,
         ignore_steps=0,
-        # num_steps=cfg.benchmark_num_steps, # epoch * steps 
-        num_steps=cfg.epochs * 11, # epoch * steps 
+        num_steps=cfg.benchmark_num_steps, # epoch * steps 
         use_torch_profiler=False,
         cfg=cfg,
         # num_steps=22, # epoch * steps 
@@ -331,8 +324,13 @@ def main():
             performance_evaluator.start_new_iter()
             for step, batch in pbar:
                 x = batch.pop("video").to(device, dtype)  # [B, C, T, H, W]
-                y = batch.pop("text")
-                
+                model_args = batch.pop("model_arg")
+                # TODO: y & mask is [8, 1, 1, 120, 4096]; 1 dim duplicate;
+                model_args['y'] = model_args['y'].view(model_args['y'].shape[0], model_args['y'].shape[1], model_args['y'].shape[3], model_args['y'].shape[4]).to(device, dtype)
+                # model_args['mask'] = model_args['mask'].view(model_args['mask'].shape[0], model_args['mask'].shape[1], model_args['mask'].shape[3], model_args['mask'].shape[4]).to(device)
+                # model_args['y'] = model_args['y'].to(device, dtype)
+                model_args['mask'] = model_args['mask'].to(device)
+
                 # Visual and text encoding
                 with torch.no_grad():
                     # Prepare visual inputs
@@ -340,7 +338,7 @@ def main():
                     x = vae.encode(x)  # [B, C, T, H/P, W/P]
                     # Prepare text inputs
                     performance_evaluator.before_text_encode()
-                    model_args = text_encoder.forward(y)   
+                         
                 # Mask
                 if cfg.mask_ratios is not None:
                     mask = mask_generator.get_masks(x)
@@ -349,8 +347,7 @@ def main():
                     mask = None
                 # Video info
                 for k, v in batch.items():
-                    if k not in ['video', 'text', 'model_arg']:
-                        # print(f" key {k} val {v}")
+                    if k not in ['video', 'text']:
                         model_args[k] = v.to(device, dtype)
                     
                 # Diffusion
@@ -439,10 +436,11 @@ def main():
         
     if coordinator.is_master():
         df = pd.DataFrame(loss_list)
-        df.to_csv(f"./loss_curve/musa_loss_curve_{datetime.now()}.csv",index=False)
+        df.to_csv(f"./loss_curve/loss_curve_{datetime.now()}.csv",index=False)
 
     performance_evaluator.on_fit_end()
 
-# torchrun --nnodes=1 --nproc_per_node=1 scripts/train_benchmark.py configs/opensora-v1-1/train/16x256x256.py --data-path /home/dist/hpcai/duanjunwen/Open-Sora/dataset/panda_train/meta/meta_clips_caption_cleaned.csv
+# Runwith
+# torchrun --nnodes=1 --nproc_per_node=8 scripts/train_benchmark_without_t5.py configs/opensora/train/16x256x256.py --data-path /home/dist/hpcai/duanjunwen/Open-Sora/dataset/panda3m/meta/meta_clips_caption_cleaned_text_idx.csv
 if __name__ == "__main__":
     main()

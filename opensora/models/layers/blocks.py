@@ -11,6 +11,7 @@
 
 import functools
 import math
+import time
 from typing import Optional
 
 import numpy as np
@@ -20,6 +21,7 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
+from einops import rearrange
 # import xformers.ops
 from einops import rearrange
 from timm.models.vision_transformer import Mlp
@@ -29,7 +31,6 @@ from opensora.acceleration.parallel_states import get_sequence_parallel_group
 
 # approx_gelu = lambda: nn.GELU(approximate="tanh")
 approx_gelu = lambda: nn.GELU(approximate="none") #  Musa GELU op only support approximate is None now!
-
 
 class LlamaRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
@@ -173,7 +174,7 @@ class Attention(nn.Module):
 
         qkv = qkv.view(qkv_shape).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
-        # WARNING: this may be a bug
+        # WARNING: this may be a bug 
         if self.rope:
             q = self.rotary_emb(q)
             k = self.rotary_emb(k)
@@ -225,7 +226,7 @@ class SeqParallelAttention(Attention):
         enable_flashattn: bool = False,
         rope=None,
     ) -> None:
-        assert rope is None, "Rope is not supported in SeqParallelAttention"
+        # assert rope is None, "Rope is not supported in SeqParallelAttention"
         super().__init__(
             dim=dim,
             num_heads=num_heads,
@@ -248,6 +249,7 @@ class SeqParallelAttention(Attention):
 
         # apply all_to_all to gather sequence and split attention heads
         # [B, SUB_N, 3, NUM_HEAD, HEAD_DIM] -> [B, N, 3, NUM_HEAD_PER_DEVICE, HEAD_DIM]
+        qkv_shape = qkv.shape
         qkv = all_to_all(qkv, sp_group, scatter_dim=3, gather_dim=1)
 
         if self.enable_flashattn:
@@ -324,15 +326,33 @@ class MultiHeadCrossAttention(nn.Module):
 
     def forward(self, x, cond, mask=None):
         # query/value: img tokens; key: condition; mask: if padding tokens
-        B, N, C = x.shape
-        q = self.q_linear(x).view(1, self.num_heads, -1, self.head_dim)
-        kv = self.kv_linear(cond).view(1, self.num_heads, 2, -1, self.head_dim)
-        k, v = kv.unbind(2)
-        # broadcast mask along dim q_seq_length; Cause sdp wont auto broadcast mask;
-        if mask is not None:
-            mask = mask.view(1, 1, 1, k.shape[-2]).repeat(1, 1 , q.shape[-2], 1)
-        x = F.scaled_dot_product_attention(query=q ,key=k ,value=v, attn_mask=mask, dropout_p=self.attn_drop.p)
+        #######
+        # torch
+        #######
+        # B, N, C = x.shape
+        # q = self.q_linear(x).view(1, self.num_heads, -1, self.head_dim)
+        # kv = self.kv_linear(cond).view(1, self.num_heads, 2, -1, self.head_dim)
+        # k, v = kv.unbind(2)
+        # # broadcast mask along dim q_seq_length; Cause sdp wont auto broadcast mask;
+        # if mask is not None:
+        #     mask = mask.view(1, 1, 1, k.shape[-2]).repeat(1, 1 , q.shape[-2], 1)
+        # x = F.scaled_dot_product_attention(query=q ,key=k ,value=v, attn_mask=mask, dropout_p=self.attn_drop.p)
         
+        # x = x.contiguous().view(B, -1, C)
+        # x = self.proj(x)
+        # x = self.proj_drop(x)
+        #######
+        # xformers
+        #######
+        B, N, C = x.shape
+        q = self.q_linear(x).view(B, -1, self.num_heads, self.head_dim) 
+        kv = self.kv_linear(cond).view(B, -1, 2, self.num_heads, self.head_dim)
+        k, v = kv.unbind(2)
+        q, k, v = torch.permute(q, (0, 2, 1, 3)), torch.permute(k, (0, 2, 1, 3)), torch.permute(v, (0, 2, 1, 3))
+        if mask is not None:
+            mask = mask.bool()
+            mask = mask.view(B, 1, 1, k.shape[-2]).repeat(1, 1 , q.shape[-2], 1)
+        x = F.scaled_dot_product_attention(query=q ,key=k ,value=v, attn_mask=mask, dropout_p=self.attn_drop.p)
         x = x.contiguous().view(B, -1, C)
         x = self.proj(x)
         x = self.proj_drop(x)
@@ -366,7 +386,6 @@ class SeqParallelMultiHeadCrossAttention(MultiHeadCrossAttention):
         q = self.q_linear(x).view(B, -1, self.num_heads, self.head_dim)
         kv = self.kv_linear(cond).view(B, -1, 2, self.num_heads, self.head_dim)
         k, v = kv.unbind(2)
-        # print(f"Seq atten Before split q shape {q.shape}, k shape {k.shape}, mask shape {mask.shape}")
 
         # apply all_to_all to gather sequence and split attention heads
         q = all_to_all(q, sp_group, scatter_dim=2, gather_dim=1)
@@ -374,20 +393,21 @@ class SeqParallelMultiHeadCrossAttention(MultiHeadCrossAttention):
         k = split_forward_gather_backward(k, get_sequence_parallel_group(), dim=2, grad_scale="down")
         v = split_forward_gather_backward(v, get_sequence_parallel_group(), dim=2, grad_scale="down")
 
-        q = q.view(1, -1, self.num_heads // sp_size, self.head_dim)
-        k = k.view(1, -1, self.num_heads // sp_size, self.head_dim)
-        v = v.view(1, -1, self.num_heads // sp_size, self.head_dim)
-        # print(f"Seq atten After split q shape {q.shape}, k shape {k.shape}, mask shape {mask.shape}")
+        q = q.view(B, -1, self.num_heads // sp_size, self.head_dim)
+        k = k.view(B, -1, self.num_heads // sp_size, self.head_dim)
+        v = v.view(B, -1, self.num_heads // sp_size, self.head_dim)
 
         # compute attention
-        attn_bias = None
-        # if mask is not None:
-        #     attn_bias = xformers.ops.fmha.BlockDiagonalMask.from_seqlens([N] * B, mask)
-        # x = xformers.ops.memory_efficient_attention(q, k, v, p=self.attn_drop.p, attn_bias=attn_bias)
+        q, k, v = torch.permute(q, (0, 2, 1, 3)), torch.permute(k, (0, 2, 1, 3)), torch.permute(v, (0, 2, 1, 3))
+        if mask is not None:
+            mask = mask.bool()
+            mask = mask.view(B, 1, 1, k.shape[-2]).repeat(1, 1 , q.shape[-2], 1)
         x = F.scaled_dot_product_attention(query=q, key=k, value=v, attn_mask=mask, dropout_p=self.attn_drop.p)
-
+        # x shape [batch, head, seq, hidden_dim]  # [8, 8, 4096, 72]
+        x = torch.permute(x, (0, 2, 1, 3))
+        # x shape [batch, seq, head, hidden_dim]  # [8, 4096, 8, 72]
         # apply all to all to gather back attention heads and scatter sequence
-        # x = x.view(B, -1, self.num_heads // sp_size, self.head_dim)
+        x = x.view(B, -1, self.num_heads // sp_size, self.head_dim)
         x = x.contiguous().view(B, -1, self.num_heads // sp_size, self.head_dim)
         x = all_to_all(x, sp_group, scatter_dim=1, gather_dim=2)
 
@@ -611,6 +631,7 @@ class CaptionEmbedder(nn.Module):
 
     def forward(self, caption, train, force_drop_ids=None):
         if train:
+            # print(f"caption {caption.shape[2:]} y_embedding {self.y_embedding.shape}")
             assert caption.shape[2:] == self.y_embedding.shape
         use_dropout = self.uncond_prob > 0
         if (train and use_dropout) or (force_drop_ids is not None):
@@ -644,8 +665,11 @@ class PositionEmbedding2D(nn.Module):
         scale: float = 1.0,
         base_size: Optional[int] = None,
     ):
-        grid_h = torch.arange(h, device=device) / scale
-        grid_w = torch.arange(w, device=device) / scale
+        # 1)RuntimeError: Unsupported tensor dtype: ComplexDouble; cause scale: complex; 2)TypeError: can't convert complex to float
+        # grid_h = torch.arange(h, device=device) / scale
+        # grid_w = torch.arange(w, device=device) / scale
+        grid_h = torch.arange(h, device=device) 
+        grid_w = torch.arange(w, device=device) 
         if base_size is not None:
             grid_h *= base_size / h
             grid_w *= base_size / w

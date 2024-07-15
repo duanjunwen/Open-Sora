@@ -18,8 +18,9 @@ from colossalai.booster.plugin import LowLevelZeroPlugin
 from colossalai.booster.plugin import TorchDDPPlugin
 from colossalai.booster.plugin import TorchFSDPPlugin
 from colossalai.cluster import DistCoordinator
-from colossalai.nn.optimizer import HybridAdam
-# from torch.optim import Adam, AdamW
+# from colossalai.nn.optimizer import HybridAdam
+from torch.optim import Adam
+from wonderwords import RandomWord, RandomSentence
 from colossalai.utils import get_current_device, set_seed
 from tqdm import tqdm
 import functools
@@ -51,7 +52,7 @@ def register_hooks(module):
     def bwd_hook(module, grad_input, grad_output):
         torch.musa.synchronize()
         runtime = time.time() - module.backward_start_time
-        # print(f"stdit {module._name} bwd runtime {runtime * 1000} ms")
+        print(f"stdit {module._name} bwd runtime {runtime * 1000} ms")
         # if 'proj' in module._name:
         #     print(f"{module._name} {module.dtype}")
         # print(f"{module._name} post hook\n")
@@ -181,7 +182,9 @@ def main():
     # 4. build model
     # ======================================================
     # 4.1. build model
-    text_encoder = build_module(cfg.text_encoder, MODELS, device=device)
+    # text_encoder = build_module(cfg.text_encoder, MODELS, device=device)
+    text_encoder_output_dim = 4096
+    text_encoder_model_max_length = cfg.text_encoder['model_max_length']
     vae = build_module(cfg.vae, MODELS)
     input_size = (dataset.num_frames, *dataset.image_size)
     latent_size = vae.get_latent_size(input_size)
@@ -190,12 +193,12 @@ def main():
         MODELS,
         input_size=latent_size,
         in_channels=vae.out_channels,
-        caption_channels=text_encoder.output_dim,
-        model_max_length=text_encoder.model_max_length,
+        caption_channels=text_encoder_output_dim,
+        model_max_length=text_encoder_model_max_length,
         dtype=dtype,
     )
     model_numel, model_numel_trainable = get_model_numel(model)
-    t5_numel, t5_numel_trainable = get_model_numel(text_encoder)
+    t5_numel = 0
     vae_numel, vae_numel_trainable = get_model_numel(vae)
 
     logger.info(
@@ -215,18 +218,18 @@ def main():
     scheduler = build_module(cfg.scheduler, SCHEDULERS)
 
     # 4.5. setup optimizer
-    optimizer = HybridAdam(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=cfg.lr,
-        weight_decay=0,
-        adamw_mode=True,
-    )
-    
-    # optimizer = Adam(
+    # optimizer = HybridAdam(
     #     filter(lambda p: p.requires_grad, model.parameters()),
     #     lr=cfg.lr,
     #     weight_decay=0,
+    #     adamw_mode=True,
     # )
+    
+    optimizer = Adam(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=cfg.lr,
+        weight_decay=0,
+    )
     
     lr_scheduler = None
 
@@ -250,13 +253,13 @@ def main():
         model_numel=model_numel,
         num_layers=model.num_heads,
         hidden_size=model.hidden_size,
-        vocab_size=text_encoder.output_dim,
+        vocab_size=text_encoder_output_dim,
         max_seq_length=512,
-        ignore_steps=0,
-        # num_steps=cfg.benchmark_num_steps, # epoch * steps 
-        num_steps=cfg.epochs * 11, # epoch * steps 
+        ignore_steps=2,
+        num_steps=cfg.benchmark_num_steps, # epoch * steps 
         use_torch_profiler=False,
         cfg=cfg,
+        use_t5=False,
         # num_steps=22, # epoch * steps 
         # use_torch_profiler=True,
         # torch_profiler_path=f"./profiler/{plugin}",
@@ -279,8 +282,46 @@ def main():
         num_steps_per_epoch = dataloader.batch_sampler.get_num_batch() // dist.get_world_size()
     else:
         num_steps_per_epoch = len(dataloader)
+    performance_evaluator = Evaluator(stdit_weight_memory=format_numel(model_numel*2),total_weight_memory=format_numel((model_numel+t5_numel+vae_numel)*2))
+    # # =======================================================
+    # # 6. test flops; OOM in vae calculate_flops;
+    # # =======================================================
+    # print(f"Memory Usage After boost {torch.musa.memory_allocated()/1024**3:.3f} GB,")
+    # x = torch.randn(cfg.batch_size, 3, cfg.dataset["num_frames"], cfg.dataset["image_size"][0], cfg.dataset["image_size"][1], dtype=dtype).to(device)  # (B, C, T, H, W) 
+    # y = [s.simple_sentence() for _ in range(cfg.batch_size)] 
+    # print(f"Memory Usage After generate data {torch.musa.memory_allocated()/1024**3:.3f} GB,")
+    # vae_encode = ProfileModule(module=vae, fn='encode')
+    # print(f"Memory Usage After Profile vae {torch.musa.memory_allocated()/1024**3:.3f} GB,")
+    # vae_flops, vae_macs, vae_params = calculate_flops(model=vae_encode,args=[x])
+    # performance_evaluator.vae_flop = vae_flops
+    # print(f"vae flops {vae_flops}, vae_macs {vae_macs}, vae_params {vae_params}")
+    
+    # with torch.no_grad():
+    #     # Prepare visual inputs
+    #     x = vae.encode(x)  # [B, C, T, H/P, W/P]
+    #     # Prepare text inputs
+    #     model_args = text_encoder.forward(y)
+    # # Mask
+    # if cfg.mask_ratios is not None:
+    #     mask = mask_generator.get_masks(x)
+    #     model_args["x_mask"] = mask
+    # else:
+    #     mask = None
+    # t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
+    # if cfg.model["type"] == "STDiT-XL/2":
+    #     stdit_flops, stdit_macs, stdit_params = calculate_flops(model=model,args=[x, t ,model_args['y'], model_args['mask']], include_backPropagation=True)
+    # elif cfg.model["type"] == "STDiT2-XL/2":
+    #     model_args['num_frames'] = torch.randn(cfg.dataset["num_frames"], dtype=dtype).to(device) 
+    #     model_args['height'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
+    #     model_args['width'] = torch.randn(cfg.batch_size, dtype=dtype).to(device)
+    #     model_args['ar'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
+    #     model_args['fps'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
+    #     stdit_flops, stdit_macs, stdit_params = calculate_flops(model=model,args=[x, t , model_args['y'], model_args['mask'], model_args["x_mask"], model_args['num_frames'], model_args['height'], model_args['width'], model_args['ar'], model_args['fps']], include_backPropagation=True)
+    # print(f"stdit_flops {stdit_flops} macs {stdit_macs} params {stdit_params}")
+    # performance_evaluator.stdit_flop = stdit_flops
+          
     # =======================================================
-    # 6. training loop
+    # 7. training loop
     # =======================================================
 
     start_epoch = start_step = log_step = sampler_start_idx = acc_step = 0
@@ -307,108 +348,83 @@ def main():
         dataloader.sampler.set_start_index(sampler_start_idx)
     model_sharding(ema)
     # 6.2. training loop
-    performance_evaluator = Evaluator(stdit_weight_memory=format_numel(model_numel*2),total_weight_memory=format_numel((model_numel+t5_numel+vae_numel)*2))
     performance_evaluator.on_fit_start()
     for name, module in model.named_modules(prefix="stdit"):
         module._name = name
     
     loss_list = list()
     # model.apply(register_hooks)
-    # if cfg.random_dataset:
-    #     num_steps_per_epoch = cfg.benchmark_num_steps
+    if cfg.random_dataset:
+        num_steps_per_epoch = cfg.benchmark_num_steps
     for epoch in range(start_epoch, cfg.epochs):
         if cfg.dataset.type == "VideoTextDataset":
             dataloader.sampler.set_epoch(epoch)
         dataloader_iter = iter(dataloader)
         logger.info(f"Beginning epoch {epoch}...")
-        with tqdm(
-            enumerate(dataloader_iter, start=start_step),
-            desc=f"Epoch {epoch}",
-            disable=not coordinator.is_master(),
-            initial=start_step,
-            total=num_steps_per_epoch,
-        ) as pbar:
-            performance_evaluator.start_new_iter()
-            for step, batch in pbar:
-                x = batch.pop("video").to(device, dtype)  # [B, C, T, H, W]
-                y = batch.pop("text")
-                
-                # Visual and text encoding
-                with torch.no_grad():
-                    # Prepare visual inputs
-                    performance_evaluator.before_video_encode()
-                    x = vae.encode(x)  # [B, C, T, H/P, W/P]
-                    # Prepare text inputs
-                    performance_evaluator.before_text_encode()
-                    model_args = text_encoder.forward(y)   
-                # Mask
-                if cfg.mask_ratios is not None:
-                    mask = mask_generator.get_masks(x)
-                    model_args["x_mask"] = mask
-                else:
-                    mask = None
-                # Video info
-                for k, v in batch.items():
-                    if k not in ['video', 'text', 'model_arg']:
-                        # print(f" key {k} val {v}")
-                        model_args[k] = v.to(device, dtype)
+        performance_evaluator.start_new_iter()
+        for step in range(num_steps_per_epoch):
+            x = torch.randn(cfg.batch_size, 3, cfg.dataset["num_frames"], cfg.dataset["image_size"][0], cfg.dataset["image_size"][1], dtype=dtype).to(device)  # (B, C, T, H, W)   
+            model_args = dict()
+            model_args['y'] = torch.randn(cfg.batch_size, 1, cfg.text_encoder['model_max_length'], text_encoder_output_dim).to(device, dtype)
+            model_args['mask'] = torch.randn(cfg.batch_size, 1, cfg.text_encoder['model_max_length']).to(device)
+            
+            # Visual and text encoding
+            with torch.no_grad():
+                # Prepare visual inputs
+                performance_evaluator.before_video_encode()
+                x = vae.encode(x)  # [B, C, T, H/P, W/P]
+                # Prepare text inputs
+                performance_evaluator.before_text_encode()
+                # model_args = text_encoder.forward(y)
+                         
+            # Mask
+            if cfg.mask_ratios is not None:
+                mask = mask_generator.get_masks(x)
+                model_args["x_mask"] = mask
+            else:
+                mask = None
+            # Video info
+            # for k, v in batch.items():
+            #     if k not in ['video', 'text']:
+            #         model_args[k] = v.to(device, dtype)
                     
-                # Diffusion
-                t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
-                if cfg.model["type"] == "STDiT2-XL/2":
-                    model_args['num_frames'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
-                    model_args['height'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
-                    model_args['width'] = torch.randn(cfg.batch_size, dtype=dtype).to(device)
-                    model_args['ar'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
-                    model_args['fps'] = torch.randn(cfg.batch_size, dtype=dtype).to(device)
-                performance_evaluator.before_forward()
-                loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
-                # Backward & update
-                loss = loss_dict["loss"].mean()
-                logger.info(f"loss: {loss}\n")
+            # Diffusion
+            t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
+            if cfg.model["type"] == "STDiT2-XL/2":
+                model_args['num_frames'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
+                model_args['height'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
+                model_args['width'] = torch.randn(cfg.batch_size, dtype=dtype).to(device)
+                model_args['ar'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
+                model_args['fps'] = torch.randn(cfg.batch_size, dtype=dtype).to(device)
+            performance_evaluator.before_forward()
+            loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
+            # Backward & update
+            loss = loss_dict["loss"].mean()
+            logger.info(f"loss: {loss}\n")
                 
-                performance_evaluator.before_backward()
-                booster.backward(loss=loss, optimizer=optimizer)
-                performance_evaluator.before_optimizer_update()
-                optimizer.step()
-                optimizer.zero_grad()
+            performance_evaluator.before_backward()
+            booster.backward(loss=loss, optimizer=optimizer)
+            performance_evaluator.before_optimizer_update()
+            optimizer.step()
+            optimizer.zero_grad()
                 
-                # Update EMA
-                update_ema(ema, model.module, optimizer=optimizer)
+            # Update EMA
+            update_ema(ema, model.module, optimizer=optimizer)
                 
-                # Log loss values:
-                all_reduce_mean(loss)
+            # Log loss values:
+            all_reduce_mean(loss)
                 
-                if coordinator.is_master():
-                    loss_list.append(float(loss.to('cpu')))
+            if coordinator.is_master():
+                loss_list.append(float(loss.to('cpu')))
                     
-                running_loss += loss.item()
-                global_step = epoch * num_steps_per_epoch + step
-                log_step += 1
-                acc_step += 1
+            running_loss += loss.item()
+            global_step = epoch * num_steps_per_epoch + step
+            log_step += 1
+            acc_step += 1
 
-                # Log to tensorboard
-                if coordinator.is_master() and (global_step + 1) % cfg.log_every == 0:
-                    avg_loss = running_loss / log_step
-                    pbar.set_postfix({"loss": avg_loss, "step": step, "global_step": global_step})
-                    running_loss = 0
-                    log_step = 0
-                    writer.add_scalar("loss", loss.item(), global_step)
-                    if cfg.wandb:
-                        wandb.log(
-                            {
-                                "iter": global_step,
-                                "epoch": epoch,
-                                "loss": loss.item(),
-                                "avg_loss": avg_loss,
-                                "acc_step": acc_step,
-                            },
-                            step=global_step,
-                        )
-
-                # Save checkpoint
-                if cfg.ckpt_every > 0 and (global_step + 1) % cfg.ckpt_every == 0:
-                    save(
+            # Save checkpoint
+            if cfg.ckpt_every > 0 and (global_step + 1) % cfg.ckpt_every == 0:
+                save(
                         booster,
                         model,
                         ema,
@@ -423,11 +439,11 @@ def main():
                         ema_shape_dict,
                         sampler=sampler_to_io,
                     )
-                    logger.info(
+                logger.info(
                         f"Saved checkpoint at epoch {epoch} step {step + 1} global_step {global_step + 1} to {exp_dir}"
-                    )
-                performance_evaluator.end_iter(input_ids=torch.empty(cfg.batch_size, cfg.epochs))
-                performance_evaluator.start_new_iter()
+                )
+            performance_evaluator.end_iter(input_ids=torch.empty(cfg.batch_size, cfg.text_encoder['model_max_length']))
+            performance_evaluator.start_new_iter()
 
         # the continue epochs are not resumed, so we need to reset the sampler start index and start step
         if cfg.dataset.type == "VideoTextDataset":
@@ -439,10 +455,10 @@ def main():
         
     if coordinator.is_master():
         df = pd.DataFrame(loss_list)
-        df.to_csv(f"./loss_curve/musa_loss_curve_{datetime.now()}.csv",index=False)
+        df.to_csv(f"./loss_curve/loss_curve_{datetime.now()}.csv",index=False)
 
     performance_evaluator.on_fit_end()
 
-# torchrun --nnodes=1 --nproc_per_node=1 scripts/train_benchmark.py configs/opensora-v1-1/train/16x256x256.py --data-path /home/dist/hpcai/duanjunwen/Open-Sora/dataset/panda_train/meta/meta_clips_caption_cleaned.csv
+# torchrun --nnodes=1 --nproc_per_node=8 scripts/train_benchmark_random_dataset_without_t5.py configs/opensora/train/16x256x256.py --data-path /home/dist/hpcai/duanjunwen/Open-Sora/dataset/panda3m/meta/meta_clips_caption_cleaned_text_idx.csv
 if __name__ == "__main__":
     main()

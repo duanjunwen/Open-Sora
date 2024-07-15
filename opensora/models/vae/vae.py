@@ -1,10 +1,14 @@
 import torch
+import torch_musa
 import torch.nn as nn
 from diffusers.models import AutoencoderKL, AutoencoderKLTemporalDecoder
 from einops import rearrange
 
 from opensora.registry import MODELS
 
+
+VAE_START = torch.musa.Event(enable_timing=True)
+VAE_END = torch.musa.Event(enable_timing=True)
 
 @MODELS.register_module()
 class VideoAutoencoderKL(nn.Module):
@@ -23,7 +27,12 @@ class VideoAutoencoderKL(nn.Module):
         x = rearrange(x, "B C T H W -> (B T) C H W")
 
         if self.micro_batch_size is None:
+            # VAE_START.record()
             x = self.module.encode(x).latent_dist.sample().mul_(0.18215)
+            # VAE_END.record()
+            # torch.musa.synchronize()
+            # print(f"Vae encode runtime: {VAE_START.elapsed_time(VAE_END)}")
+        
         else:
             bs = self.micro_batch_size
             x_out = []

@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -29,6 +30,14 @@ from opensora.models.layers.blocks import (
 from opensora.registry import MODELS
 from opensora.utils.ckpt_utils import load_checkpoint
 
+def get_mem_info(empty_mem):
+    torch.musa.synchronize()
+    torch.musa.empty_cache()
+    peak_mem = torch.musa.max_memory_allocated() - empty_mem
+    final_mem = torch.musa.memory_allocated()
+    used_mem = final_mem - empty_mem
+    return used_mem, peak_mem
+
 
 class STDiT2Block(nn.Module):
     def __init__(
@@ -48,7 +57,7 @@ class STDiT2Block(nn.Module):
         self.enable_flashattn = enable_flashattn
         self._enable_sequence_parallelism = enable_sequence_parallelism
 
-        assert not self._enable_sequence_parallelism, "Sequence parallelism is not supported."
+        # assert not self._enable_sequence_parallelism, "Sequence parallelism is not supported."
         if enable_sequence_parallelism:
             self.attn_cls = SeqParallelAttention
             self.mha_cls = SeqParallelMultiHeadCrossAttention
@@ -101,7 +110,6 @@ class STDiT2Block(nn.Module):
 
     def forward(self, x, y, t, t_tmp, mask=None, x_mask=None, t0=None, t0_tmp=None, T=None, S=None):
         B, N, C = x.shape
-
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.scale_shift_table[None] + t.reshape(B, 6, -1)
         ).chunk(6, dim=1)
@@ -117,12 +125,18 @@ class STDiT2Block(nn.Module):
             ).chunk(3, dim=1)
 
         # modulate
+        # empty_mem = torch.musa.memory_allocated()
         x_m = t2i_modulate(self.norm1(x), shift_msa, scale_msa)
         if x_mask is not None:
             x_m_zero = t2i_modulate(self.norm1(x), shift_msa_zero, scale_msa_zero)
             x_m = self.t_mask_select(x_mask, x_m, x_m_zero, T, S)
+        
+        # used_mem, peak_mem = get_mem_info(empty_mem)
+        # print(f"modulate1 mem cost(norm1): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
+
 
         # spatial branch
+        # empty_mem = torch.musa.memory_allocated()
         x_s = rearrange(x_m, "B (T S) C -> (B T) S C", T=T, S=S)
         x_s = self.attn(x_s)
         x_s = rearrange(x_s, "(B T) S C -> B (T S) C", T=T, S=S)
@@ -133,14 +147,22 @@ class STDiT2Block(nn.Module):
         else:
             x_s = gate_msa * x_s
         x = x + self.drop_path(x_s)
+        # used_mem, peak_mem = get_mem_info(empty_mem)
+        # print(f"spatial branch mem cost(attn, drop_path): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
+
 
         # modulate
+        # empty_mem = torch.musa.memory_allocated()
         x_m = t2i_modulate(self.norm_temp(x), shift_tmp, scale_tmp)
         if x_mask is not None:
             x_m_zero = t2i_modulate(self.norm_temp(x), shift_tmp_zero, scale_tmp_zero)
             x_m = self.t_mask_select(x_mask, x_m, x_m_zero, T, S)
+        # used_mem, peak_mem = get_mem_info(empty_mem)
+        # print(f"modulate2 mem cost(norm_temp): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
+
 
         # temporal branch
+        # empty_mem = torch.musa.memory_allocated()
         x_t = rearrange(x_m, "B (T S) C -> (B S) T C", T=T, S=S)
         x_t = self.attn_temp(x_t)
         x_t = rearrange(x_t, "(B S) T C -> B (T S) C", T=T, S=S)
@@ -151,17 +173,30 @@ class STDiT2Block(nn.Module):
         else:
             x_t = gate_tmp * x_t
         x = x + self.drop_path(x_t)
+        # used_mem, peak_mem = get_mem_info(empty_mem)
+        # print(f"temporal branch mem cost(attn_temp, drop_path): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
+
 
         # cross attn
+        # empty_mem = torch.musa.memory_allocated()
         x = x + self.cross_attn(x, y, mask)
+        # used_mem, peak_mem = get_mem_info(empty_mem)
+        # print(f"cross attn mem cost(cross_attn): used_mem: malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
+
 
         # modulate
+        # empty_mem = torch.musa.memory_allocated()
         x_m = t2i_modulate(self.norm2(x), shift_mlp, scale_mlp)
         if x_mask is not None:
             x_m_zero = t2i_modulate(self.norm2(x), shift_mlp_zero, scale_mlp_zero)
             x_m = self.t_mask_select(x_mask, x_m, x_m_zero, T, S)
+        # used_mem, peak_mem = get_mem_info(empty_mem)
+        # print(f"modulate3 mem cost(norm2): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
+
+
 
         # mlp
+        # used_mem, peak_mem = get_mem_info(empty_mem)
         x_mlp = self.mlp(x_m)
         if x_mask is not None:
             x_mlp_zero = gate_mlp_zero * x_mlp
@@ -170,6 +205,8 @@ class STDiT2Block(nn.Module):
         else:
             x_mlp = gate_mlp * x_mlp
         x = x + self.drop_path(x_mlp)
+        # used_mem, peak_mem = get_mem_info(empty_mem)
+        # print(f"mlp mem cost(mlp, drop_path): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
 
         return x
 
@@ -302,9 +339,10 @@ class STDiT2(nn.Module):
             x (torch.Tensor): output latent representation; of shape [B, C, T, H, W]
         """
         B = x.shape[0]
-        x = x.to(self.dtype)
-        timestep = timestep.to(self.dtype)
-        y = y.to(self.dtype)
+        dtype = self.x_embedder.proj.weight.dtype
+        x = x.to(dtype)
+        timestep = timestep.to(dtype)
+        y = y.to(dtype)
 
         # === process data info ===
         # 1. get dynamic size
@@ -335,11 +373,17 @@ class STDiT2(nn.Module):
         x = self.x_embedder(x)  # [B, N, C]
         x = rearrange(x, "B (T S) C -> B T S C", T=T, S=S)
         x = x + pos_emb
-        x = rearrange(x, "B T S C -> B (T S) C")
+        # x = rearrange(x, "B T S C -> B (T S) C")
 
-        # shard over the sequence dim if sp is enabled
+        # # shard over the sequence dim if sp is enabled
+        # if self.enable_sequence_parallelism:
+        #     x = split_forward_gather_backward(x, get_sequence_parallel_group(), dim=1, grad_scale="down")
         if self.enable_sequence_parallelism:
-            x = split_forward_gather_backward(x, get_sequence_parallel_group(), dim=1, grad_scale="down")
+            x = split_forward_gather_backward(x, get_sequence_parallel_group(), dim=2, grad_scale="down")
+            S = S // dist.get_world_size(get_sequence_parallel_group())
+
+        x = rearrange(x, "B T S C -> B (T S) C", T=T, S=S)
+
 
         # prepare adaIN
         t = self.t_embedder(timestep, dtype=x.dtype)  # [B, C]
@@ -366,11 +410,8 @@ class STDiT2(nn.Module):
         if mask is not None:
             if mask.shape[0] != y.shape[0]:
                 mask = mask.repeat(y.shape[0] // mask.shape[0], 1)
-            mask = mask.squeeze(1).squeeze(1)
-            y = y.squeeze(1).masked_select(mask.unsqueeze(-1) != 0).view(1, -1, x.shape[-1])
-            y_lens = mask.view(B, 1, 1, y.shape[-2])
-            # y_lens = mask.sum(dim=1).tolist()
-            
+            mask = mask.squeeze(1).squeeze(1) # y shape ([1, 1, 120, 1152]); mask shape [120]
+            y_lens = mask.view(B, 1, 1, 200) # last dim always 120/200
         else:
             y_lens = [y.shape[2]] * y.shape[0]
             y = y.squeeze(1).view(1, -1, x.shape[-1])
@@ -391,9 +432,15 @@ class STDiT2(nn.Module):
                 S,
             )
 
+        # if self.enable_sequence_parallelism:
+        #     x = gather_forward_split_backward(x, get_sequence_parallel_group(), dim=1, grad_scale="up")
+        # # x.shape: [B, N, C]
+        
         if self.enable_sequence_parallelism:
-            x = gather_forward_split_backward(x, get_sequence_parallel_group(), dim=1, grad_scale="up")
-        # x.shape: [B, N, C]
+            x = rearrange(x, "B (T S) C -> B T S C", T=T, S=S)
+            x = gather_forward_split_backward(x, get_sequence_parallel_group(), dim=2, grad_scale="up")
+            S = S * dist.get_world_size(get_sequence_parallel_group())
+            x = rearrange(x, "B T S C -> B (T S) C", T=T, S=S)
 
         # final process
         x = self.final_layer(x, t, x_mask, t0_spc, T, S)  # [B, N, C=T_p * H_p * W_p * C_out]
@@ -500,8 +547,8 @@ class STDiT2(nn.Module):
 
 @MODELS.register_module("STDiT2-XL/2")
 def STDiT2_XL_2(from_pretrained=None, **kwargs):
-    # model = STDiT2(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=16, **kwargs)
-    model = STDiT2(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=18, **kwargs)
+    model = STDiT2(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=16, **kwargs)
+    # model = STDiT2(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=18, **kwargs)
     if from_pretrained is not None:
         load_checkpoint(model, from_pretrained)
     return model

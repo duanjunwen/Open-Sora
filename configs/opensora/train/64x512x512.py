@@ -48,7 +48,7 @@ seed = 42
 outputs = "outputs"
 wandb = False
 
-epochs = 1000
+epochs = 1
 log_every = 10
 ckpt_every = 250
 load = None
@@ -60,3 +60,8 @@ load = None
 batch_size = 1
 lr = 2e-5
 grad_clip = 1.0
+
+random_dataset = True
+benchmark_num_steps = 4
+num_ckpt_blocks = 28 # STDIT total 28
+cfg_name = "64x512x512"
