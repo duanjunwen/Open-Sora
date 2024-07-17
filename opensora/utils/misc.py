@@ -45,6 +45,11 @@ def format_numel_str(numel: int) -> str:
         return f"{numel}"
 
 
+def format_numel(numel: int) -> str:
+    B = 1024**3
+    return numel / B
+
+
 def all_reduce_mean(tensor: torch.Tensor) -> torch.Tensor:
     dist.all_reduce(tensor=tensor, op=dist.ReduceOp.SUM)
     tensor.div_(dist.get_world_size())
