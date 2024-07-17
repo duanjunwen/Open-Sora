@@ -106,6 +106,7 @@ def main():
     coordinator = DistCoordinator()
     device = get_current_device()  # device musa:0
     dtype = to_torch_dtype(cfg.dtype)
+    torch.backends.cuda.flash_sdp_enabled() # backends have no attr musa; if rm musa, then torch.backends has 
 
     # 2.2. init logger, tensorboard & wandb
     if not coordinator.is_master():
@@ -252,7 +253,7 @@ def main():
         hidden_size=model.hidden_size,
         vocab_size=text_encoder.output_dim,
         max_seq_length=512,
-        ignore_steps=0,
+        ignore_steps=4,
         # num_steps=cfg.benchmark_num_steps, # epoch * steps 
         num_steps=cfg.epochs * 11, # epoch * steps 
         use_torch_profiler=False,

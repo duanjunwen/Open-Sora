@@ -179,21 +179,13 @@ class Attention(nn.Module):
             q = self.rotary_emb(q)
             k = self.rotary_emb(k)
         q, k = self.q_norm(q), self.k_norm(k)
-        enable_flashattn=False # disable_flashattn
         if enable_flashattn:
-            from flash_attn import flash_attn_func
-
             # (B, #heads, N, #dim) -> (B, N, #heads, #dim)
             q = q.permute(0, 2, 1, 3)
             k = k.permute(0, 2, 1, 3)
             v = v.permute(0, 2, 1, 3)
-            x = flash_attn_func(
-                q,
-                k,
-                v,
-                dropout_p=self.attn_drop.p if self.training else 0.0,
-                softmax_scale=self.scale,
-            )
+            q = q * self.scale
+            x = F.scaled_dot_product_attention(query=q ,key=k ,value=v, dropout_p=self.attn_drop.p)
         else:
             dtype = q.dtype
             q = q * self.scale
@@ -274,15 +266,7 @@ class SeqParallelAttention(Attention):
         q, k, v = qkv.unbind(0)
         q, k = self.q_norm(q), self.k_norm(k)
         if self.enable_flashattn:
-            from flash_attn import flash_attn_func
-
-            x = flash_attn_func(
-                q,
-                k,
-                v,
-                dropout_p=self.attn_drop.p if self.training else 0.0,
-                softmax_scale=self.scale,
-            )
+            x = F.scaled_dot_product_attention(query=q ,key=k ,value=v, dropout_p=self.attn_drop.p)
         else:
             dtype = q.dtype
             q = q * self.scale

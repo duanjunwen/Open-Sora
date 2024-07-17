@@ -88,7 +88,16 @@ class STDiT2Block(nn.Module):
 
         # temporal branch
         self.norm_temp = get_layernorm(hidden_size, eps=1e-6, affine=False, use_kernel=enable_layernorm_kernel)  # new
-        self.attn_temp = self.attn_cls(
+        # self.attn_temp = self.attn_cls(
+        #     hidden_size,
+        #     num_heads=num_heads,
+        #     qkv_bias=True,
+        #     # enable_flashattn=self.enable_flashattn,
+        #     rope=rope,
+        #     qk_norm=qk_norm,
+        # )
+        
+        self.attn_temp = Attention(
             hidden_size,
             num_heads=num_heads,
             qkv_bias=True,
@@ -96,6 +105,8 @@ class STDiT2Block(nn.Module):
             rope=rope,
             qk_norm=qk_norm,
         )
+        
+        
         self.scale_shift_table_temporal = nn.Parameter(torch.randn(3, hidden_size) / hidden_size**0.5)  # new
 
     def t_mask_select(self, x_mask, x, masked_x, T, S):
@@ -548,7 +559,8 @@ class STDiT2(nn.Module):
 @MODELS.register_module("STDiT2-XL/2")
 def STDiT2_XL_2(from_pretrained=None, **kwargs):
     model = STDiT2(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=16, **kwargs)
-    # model = STDiT2(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=18, **kwargs)
+    # model = STDiT2(depth=28, hidden_size=1024, patch_size=(1, 2, 2), num_heads=16, **kwargs)
+    
     if from_pretrained is not None:
         load_checkpoint(model, from_pretrained)
     return model

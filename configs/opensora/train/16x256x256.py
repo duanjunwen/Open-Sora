@@ -10,15 +10,19 @@ dataset = dict(
 
 # Define acceleration
 num_workers = 4
+
 # dtype = "fp32"
 # dtype = "fp16"
 dtype = "bf16"
 grad_checkpoint = True
+
 # plugin = "ddp"
+# plugin = "zero1"
 # plugin = "zero2"
 plugin = "zero2-seq"
+
 # sp_size = 1
-sp_size = 2
+# sp_size = 2
 # sp_size = 4
 # sp_size = 8
 
@@ -27,9 +31,9 @@ model = dict(
     type="STDiT-XL/2",
     space_scale=0.5,
     time_scale=1.0,
-    from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth",
-    # enable_sequence_parallelism = True, 
-    enable_flashattn=False,
+    # from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth",
+    enable_sequence_parallelism = True,
+    enable_flashattn=True,
     enable_layernorm_kernel=False,
 )
 
@@ -60,13 +64,13 @@ log_every = 10
 ckpt_every = 300
 load = None
 
-batch_size = 8
+batch_size = 16
 lr = 2e-5
 grad_clip = 1.0
-grad_accm = 2
+num_steps = 2 # grad accum step
 
 random_dataset = True
-benchmark_num_steps = 11
+benchmark_num_steps = 3
 num_ckpt_blocks = 28 # STDIT total 28; bs=16, best 22/23; bs=8, best ;
 cfg_name = "16x256x256"
 # wandb = True

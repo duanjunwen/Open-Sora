@@ -523,7 +523,8 @@ class PerformanceEvaluator:
         self.flop_hfu += flop_hfu
         # Reporting speed performance, using statistics on master rank for convenience.
         self.coordinator.print_on_master(
-            f"TGS of last iteration: {batch_size * seq_len / (current_iter_duration + 1e-12) / self.mp_world_size:.3f} tokens/s, "
+            # f"TGS of last iteration: {batch_size * seq_len / (current_iter_duration + 1e-12) / self.mp_world_size:.3f} tokens/s, "
+            f"TGS of last iteration: {batch_size / (current_iter_duration + 1e-12):.3f} samples/s, "
             f"TFLOPS of last iteration: {flop / (current_iter_duration + 1e-12):.3f}"
         )
 

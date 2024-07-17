@@ -62,7 +62,7 @@ def run_attention(rank, world_size):
 
     # check input grad
     assert torch.allclose(x.grad, seq_x.grad, atol=1e-7), f"{x.grad}\nvs\n{seq_x.grad}"
-    print(f"x.grad\n{x.grad}\n seq_x.grad\n{seq_x.grad}\n")
+    # print(f"x.grad\n{x.grad}\n seq_x.grad\n{seq_x.grad}\n")
 
 
 def run_dist(rank, world_size, port):

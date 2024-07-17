@@ -7,7 +7,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch.optim import Adam, AdamW
 from torch.testing import assert_close
-
+from colossalai.testing import spawn
 import colossalai
 from colossalai.booster import Booster
 from colossalai.booster.plugin import LowLevelZeroPlugin
@@ -30,7 +30,6 @@ def setup_param_groups(model: nn.Module) -> list:
         },
     ]
     return optimizer_grouped_parameters
-
 
 
 def test_stditblock(device):
@@ -344,7 +343,78 @@ def test_stdit_xl_2_booster_step(device):
     optimizer.zero_grad()
     
     # print(f"Param after step:\n {model_param}")
-  
+    
+def run_seq_parallel_stdit(rank, world_size):
+    device="musa"
+    dtype = torch.bfloat16
+    torch.manual_seed(1024)
+    set_sequence_parallel_group(dist.group.WORLD)
+    
+    model = STDiT_XL_2(
+        space_scale=0.5,
+        time_scale=1.0,
+        enable_sequence_parallelism = True,
+        enable_flashattn=True,
+        enable_layernorm_kernel=False,
+    )
+    model.to(device, dtype)
+    # B, C, T, H, W = 16, 4, 16, 32, 32 # T=4 
+    B, C, T, H, W = 1, 4, 4, 16, 16
+    N_token = 120
+    caption_channels = 4096
+    x = torch.randn(B, C, T, H, W, dtype=dtype).to(device)  # (B, C, T, H, W)
+    x.requires_grad = True
+    y = torch.randn(B, 1, N_token, 4096, dtype=dtype).to(device)   #  [B, caption_channels=512]
+    timestep = torch.randint(0, 1000, (x.shape[0],), device=device)
+    mask = None  # [B, N_token] # Method 1
+   
+    x_stdit = model(x=x, timestep=timestep, y=y, mask=mask)
+
+    print(f"STDiT seq parallel Shape {x_stdit.shape}\n {x_stdit}\n")
+    
+    x_stdit.mean().backward()
+
+
+def run_seq_parallel_stditblk(rank, world_size):
+    device = "musa"
+    torch.manual_seed(1024)
+    dtype = torch.bfloat16
+    torch.manual_seed(1024)
+    set_sequence_parallel_group(dist.group.WORLD)
+    
+    B, N, C = 4, 32, 256
+    
+    stdit_block = STDiTBlock(
+        hidden_size=256, 
+        num_heads=8, d_s=8, d_t=8,
+        enable_flashattn=True,
+        enable_layernorm_kernel=False,
+        enable_sequence_parallelism=True,
+        ).to(device)
+    
+    x = torch.randn(B, N, C, dtype=dtype).to(device)  # (B, C, T, H, W)
+    x.requires_grad = True
+    y = torch.randn(B, N, C, dtype=dtype).to(device)  #  [B, 1, N_token, C]
+    y.requires_grad = True
+    y.retain_grad()
+    timestep = torch.randn(B, 6, dtype=dtype).to(device) 
+    
+    output = stdit_block(x, y, timestep)
+    print(f"stdit_block Shape {output.shape}\n {output}\n")
+    
+    output.mean().backward()
+
+    
+    
+
+def run_dist(rank, world_size, port):
+    colossalai.launch({}, rank=rank, world_size=world_size, host="localhost", port=port, backend="mccl")
+    run_seq_parallel_stdit(rank, world_size)
+    # run_seq_parallel_stditblk(rank, world_size)
+    
+def test_seq_parallel_stdit():
+    spawn(run_dist, nprocs=2)
+
 
 def test_stdit_single_op(device):
     device = torch.device(device)
@@ -418,4 +488,5 @@ if __name__ == "__main__":
     # test_stdit_xl_2_step(device)
     # test_stdit_xl_2_booster_step(device)
     # test_stdit_single_op(device)
-    assert_stdit_single_op()
+    # assert_stdit_single_op()
+    test_seq_parallel_stdit()

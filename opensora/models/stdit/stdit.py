@@ -28,17 +28,6 @@ from opensora.models.layers.blocks import (
 from opensora.registry import MODELS
 from opensora.utils.ckpt_utils import load_checkpoint
 
-STDIT_START = torch.musa.Event(enable_timing=True)
-STDIT_END = torch.musa.Event(enable_timing=True)
-
-
-def get_mem_info(empty_mem):
-    torch.musa.synchronize()
-    torch.musa.empty_cache()
-    peak_mem = torch.musa.max_memory_allocated() - empty_mem
-    final_mem = torch.musa.memory_allocated()
-    used_mem = final_mem - empty_mem
-    return used_mem, peak_mem
 
 class STDiTBlock(nn.Module):
     def __init__(
@@ -86,11 +75,20 @@ class STDiTBlock(nn.Module):
 
         if self._enable_sequence_parallelism:
             sp_size = dist.get_world_size(get_sequence_parallel_group())
+            # # make sure d_t is divisible by sp_size
+            # assert d_t % sp_size == 0
+            # self.d_t = d_t // sp_size
             # make sure d_t is divisible by sp_size
-            assert d_t % sp_size == 0
-            self.d_t = d_t // sp_size
+            assert d_s % sp_size == 0
+            self.d_s = d_s // sp_size
 
-        self.attn_temp = self.attn_cls(
+        # self.attn_temp = self.attn_cls(
+        #     hidden_size,
+        #     num_heads=num_heads,
+        #     qkv_bias=True,
+        #     enable_flashattn=self.enable_flashattn,
+        # )
+        self.attn_temp = Attention(
             hidden_size,
             num_heads=num_heads,
             qkv_bias=True,
@@ -121,7 +119,6 @@ class STDiTBlock(nn.Module):
             x_m = self.t_mask_select(x_m, x_m_zero, x_mask)
 
         # spatial branch
-        # empty_mem = torch.musa.memory_allocated()
         x_s = rearrange(x_m, "B (T S) C -> (B T) S C", T=self.d_t, S=self.d_s)
         x_s = self.attn(x_s)
         x_s = rearrange(x_s, "(B T) S C -> B (T S) C", T=self.d_t, S=self.d_s)
@@ -134,30 +131,21 @@ class STDiTBlock(nn.Module):
             x_s = gate_msa * x_s
 
         x = x + self.drop_path(x_s)
-        # used_mem, peak_mem = get_mem_info(empty_mem)
-        # print(f"spatial branch mem cost(attn, drop_path): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
-        
+
         # temporal branch
-        # empty_mem = torch.musa.memory_allocated()
         x_t = rearrange(x, "B (T S) C -> (B S) T C", T=self.d_t, S=self.d_s)
         if tpe is not None:
             x_t = x_t + tpe
         x_t = self.attn_temp(x_t)
         x_t = rearrange(x_t, "(B S) T C -> B (T S) C", T=self.d_t, S=self.d_s)
         x = x + self.drop_path(gate_msa * x_t)
-        # used_mem, peak_mem = get_mem_info(empty_mem)
-        # print(f"temporal branch mem cost(attn_temp, drop_path): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
 
         # cross attn
-        # empty_mem = torch.musa.memory_allocated()
-        mask = mask.bool()
+        if mask is not None:
+            mask = mask.bool()
         x = x + self.cross_attn(x, y, mask)
-        # used_mem, peak_mem = get_mem_info(empty_mem)
-        # print(f"cross attn mem cost(cross_attn): used_mem: malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
-
 
         # mlp
-        # empty_mem = torch.musa.memory_allocated()
         x_m = t2i_modulate(self.norm2(x), shift_mlp, scale_mlp)
         if x_mask is not None:
             x_m_zero = t2i_modulate(self.norm2(x), shift_mlp_zero, scale_mlp_zero)
@@ -300,11 +288,7 @@ class STDiT(nn.Module):
         y = y.to(dtype)
 
         # embedding
-        # STDIT_START.record()
         x = self.x_embedder(x)  # [B, N, C]
-        # STDIT_END.record()
-        # torch.musa.synchronize()
-        # print(f"x embedder: {STDIT_START.elapsed_time(STDIT_END)}")
         x = rearrange(x, "B (T S) C -> B T S C", T=self.num_temporal, S=self.num_spatial)
         x = x + self.pos_embed
         # x = rearrange(x, "B T S C -> B (T S) C")
@@ -314,12 +298,12 @@ class STDiT(nn.Module):
         #     x = split_forward_gather_backward(x, get_sequence_parallel_group(), dim=1, grad_scale="down")
         
         if self.enable_sequence_parallelism:
+            group = get_sequence_parallel_group()
             x = split_forward_gather_backward(x, get_sequence_parallel_group(), dim=2, grad_scale="down")
             S = S // dist.get_world_size(get_sequence_parallel_group())
 
         x = rearrange(x, "B T S C -> B (T S) C", T=T, S=S)
             
-        # STDIT_START.record()
         t = self.t_embedder(timestep, dtype=x.dtype)  # [B, C]
         t_mlp = self.t_block(t)  # [B, C]
         if x_mask is not None:
@@ -330,42 +314,29 @@ class STDiT(nn.Module):
             t0 = None
             t0_mlp = None
         y = self.y_embedder(y, self.training)  # [B, 1, N_token, C]
-        # STDIT_END.record()
-        # torch.musa.synchronize()
-        # print(f"t & y embedder runtime: {STDIT_START.elapsed_time(STDIT_END)}")
-
 
         if mask is not None:
             if mask.shape[0] != y.shape[0]:
                 mask = mask.repeat(y.shape[0] // mask.shape[0], 1)
             mask = mask.squeeze(1).squeeze(1) # y shape ([1, 1, 120, 1152]); mask shape [120]
-            # y = y.float() # RuntimeError: Dtype of input tensor of masked_select only support Float32/Int32/Int64, but now it is Half
-            # y = y.squeeze(1).masked_select(mask.unsqueeze(-1) != 0).view(1, -1, x.shape[-1])
-            # y = y.half()
-            # print(f"before mask x{x.shape} y {y.shape} mask {mask.shape}")
             y_lens = mask.view(B, 1, 1, 120) # last dim always 120
-            # mask = mask.repeat(x.shape[-2], 1)
-            # y_lens = mask.sum(dim=1).tolist()
         else:
             y_lens = [y.shape[2]] * y.shape[0]
             y = y.squeeze(1).view(1, -1, x.shape[-1])
             
         # blocks
         for i, block in enumerate(self.blocks):
-            # STDIT_START.record()
             if i == 0:
-                if self.enable_sequence_parallelism:
-                    tpe = torch.chunk(
-                        self.pos_embed_temporal, dist.get_world_size(get_sequence_parallel_group()), dim=1
-                    )[self.sp_rank].contiguous()
-                else:
-                    tpe = self.pos_embed_temporal
+                # if self.enable_sequence_parallelism:
+                #     tpe = torch.chunk(
+                #         self.pos_embed_temporal, dist.get_world_size(get_sequence_parallel_group()), dim=1
+                #     )[self.sp_rank].contiguous()
+                # else:
+                #     tpe = self.pos_embed_temporal
+                tpe = self.pos_embed_temporal
             else:
                 tpe = None
             x = auto_grad_checkpoint(block, x, y, t_mlp, y_lens, tpe, x_mask, t0_mlp)
-            # STDIT_END.record()
-            # torch.musa.synchronize()
-            # print(f"stdit block {i} runtime: {STDIT_START.elapsed_time(STDIT_END)}")
 
         # if self.enable_sequence_parallelism:
         #     x = gather_forward_split_backward(x, get_sequence_parallel_group(), dim=1, grad_scale="up")
@@ -378,13 +349,8 @@ class STDiT(nn.Module):
             x = rearrange(x, "B T S C -> B (T S) C", T=T, S=S)
 
         # final process
-        # STDIT_START.record()
         x = self.final_layer(x, t, x_mask, t0)  # [B, N, C=T_p * H_p * W_p * C_out]
         x = self.unpatchify(x)  # [B, C_out, T, H, W]
-        # STDIT_END.record()
-        # torch.musa.synchronize()
-        # print(f"final layer runtime: {STDIT_START.elapsed_time(STDIT_END)}")
-
         # cast to float32 for better accuracy
         x = x.to(torch.float32)
         return x
@@ -495,8 +461,8 @@ class STDiT(nn.Module):
 @MODELS.register_module("STDiT-XL/2")
 def STDiT_XL_2(from_pretrained=None, **kwargs):
     # model = STDiT(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=16, **kwargs)
-    model = STDiT(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=18, **kwargs)
-    # model = STDiT(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=9, **kwargs)
+    model = STDiT(depth=28, hidden_size=1024, patch_size=(1, 2, 2), num_heads=16, **kwargs)
+    
     if from_pretrained is not None:
         load_checkpoint(model, from_pretrained)
     return model

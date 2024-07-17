@@ -40,7 +40,7 @@ model = dict(
     # time_scale=1.0,
     from_pretrained="./pretrained_models/stdit/OpenSora-STDiT-v2-stage3/model.safetensors",
     input_sq_size=512,  # pretrained model is trained on 512x512
-    enable_sequence_parallelism = True, 
+    # enable_sequence_parallelism = True, 
     enable_flashattn=False,
     enable_layernorm_kernel=False,
 )
