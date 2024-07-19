@@ -5,7 +5,7 @@ dataset = dict(
     num_frames=16,
     frame_interval=3,
     image_size=(256, 256),
-    t5_offline=False, # False, input(to t5) is text; True, input is tensor ; 
+    t5_offline=True, # False, input(to t5) is text; True, input is tensor ; 
 )
 
 # Define acceleration
@@ -23,7 +23,7 @@ plugin = "zero2-seq"
 
 # sp_size = 1
 # sp_size = 2
-# sp_size = 4
+sp_size = 4
 # sp_size = 8
 
 # Define model
@@ -70,7 +70,8 @@ grad_clip = 1.0
 num_steps = 2 # grad accum step
 
 random_dataset = True
-benchmark_num_steps = 3
+benchmark_num_steps = 5
 num_ckpt_blocks = 28 # STDIT total 28; bs=16, best 22/23; bs=8, best ;
 cfg_name = "16x256x256"
+hidden_dim=1024
 # wandb = True

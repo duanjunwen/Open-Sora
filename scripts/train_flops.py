@@ -342,21 +342,21 @@ def main():
             # Visual and text encoding
             with torch.no_grad():
                 
-                inputs = tokenizer(
-                                y,
-                                max_length=cfg.text_encoder['model_max_length'],
-                                padding="max_length",
-                                truncation=True,
-                                return_attention_mask=True,
-                                add_special_tokens=True,
-                                return_tensors="pt",
-                )
-                t5_flops, t5_macs, t5_params = calculate_flops(model=text_encoder,kwargs=inputs)
-                print(f"t5 flops {t5_flops}, t5_macs {t5_macs}, t5_params {t5_params}")
-                x_encoder_input = torch.randn(cfg.batch_size, 3, cfg.dataset["num_frames"], cfg.dataset["image_size"][0], cfg.dataset["image_size"][1], dtype=dtype).to(device)
-                vae_encode = ProfileModule(module=vae, fn='encode')
-                vae_flops, vae_macs, vae_params = calculate_flops(model=vae_encode,args=[x_encoder_input])
-                print(f"vae flops {vae_flops}, vae_macs {vae_macs}, vae_params {vae_params}")
+                # inputs = tokenizer(
+                #                 y,
+                #                 max_length=cfg.text_encoder['model_max_length'],
+                #                 padding="max_length",
+                #                 truncation=True,
+                #                 return_attention_mask=True,
+                #                 add_special_tokens=True,
+                #                 return_tensors="pt",
+                # )
+                # t5_flops, t5_macs, t5_params = calculate_flops(model=text_encoder,kwargs=inputs)
+                # print(f"t5 flops {t5_flops}, t5_macs {t5_macs}, t5_params {t5_params}")
+                # x_encoder_input = torch.randn(cfg.batch_size, 3, cfg.dataset["num_frames"], cfg.dataset["image_size"][0], cfg.dataset["image_size"][1], dtype=dtype).to(device)
+                # vae_encode = ProfileModule(module=vae, fn='encode')
+                # vae_flops, vae_macs, vae_params = calculate_flops(model=vae_encode,args=[x_encoder_input])
+                # print(f"vae flops {vae_flops}, vae_macs {vae_macs}, vae_params {vae_params}")
             
                 
                 # Prepare visual inputs
@@ -385,7 +385,7 @@ def main():
             if cfg.model["type"] == "STDiT-XL/2":
                 stdit_flops, stdit_macs, stdit_params = calculate_flops(model=model,args=[x, t ,model_args['y'], model_args['mask']], include_backPropagation=True)
             elif cfg.model["type"] == "STDiT2-XL/2":
-                model_args['num_frames'] = torch.randn(cfg.dataset["num_frames"], dtype=dtype).to(device) 
+                model_args['num_frames'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
                 model_args['height'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
                 model_args['width'] = torch.randn(cfg.batch_size, dtype=dtype).to(device)
                 model_args['ar'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 

@@ -558,8 +558,8 @@ class STDiT2(nn.Module):
 
 @MODELS.register_module("STDiT2-XL/2")
 def STDiT2_XL_2(from_pretrained=None, **kwargs):
-    model = STDiT2(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=16, **kwargs)
-    # model = STDiT2(depth=28, hidden_size=1024, patch_size=(1, 2, 2), num_heads=16, **kwargs)
+    # model = STDiT2(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=16, **kwargs)
+    model = STDiT2(depth=28, hidden_size=1536, patch_size=(1, 2, 2), num_heads=24, **kwargs)
     
     if from_pretrained is not None:
         load_checkpoint(model, from_pretrained)

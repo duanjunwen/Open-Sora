@@ -130,10 +130,18 @@ def main():
             max_norm=cfg.grad_clip,
         )
         set_data_parallel_group(dist.group.WORLD)
+    elif cfg.plugin == "zero1":
+        plugin = LowLevelZeroPlugin(
+            stage=1,
+            precision=cfg.dtype,
+            initial_scale=2**16,
+            max_norm=cfg.grad_clip,
+        )
+        set_data_parallel_group(dist.group.WORLD)
     elif cfg.plugin == "zero2-seq":
         plugin = ZeroSeqParallelPlugin(
             sp_size=cfg.sp_size,
-            stage=2,
+            stage=1,
             precision=cfg.dtype,
             initial_scale=2**16,
             max_norm=cfg.grad_clip,
@@ -366,7 +374,6 @@ def main():
                 loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
                 # Backward & update
                 loss = loss_dict["loss"].mean()
-                logger.info(f"loss: {loss}\n")
                 
                 performance_evaluator.before_backward()
                 booster.backward(loss=loss, optimizer=optimizer)
@@ -379,6 +386,7 @@ def main():
                 
                 # Log loss values:
                 all_reduce_mean(loss)
+                logger.info(f"loss: {loss}\n")
                 
                 if coordinator.is_master():
                     loss_list.append(float(loss.to('cpu')))

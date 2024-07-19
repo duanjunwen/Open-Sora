@@ -26,10 +26,11 @@ num_workers = 4
 dtype = "bf16"
 grad_checkpoint = True
 # plugin = "ddp"
+plugin = "zero1"
 # plugin = "zero2"
-plugin = "zero2-seq"
-# sp_size = 1
-sp_size = 2
+# plugin = "zero2-seq"
+sp_size = 1
+# sp_size = 2
 # sp_size = 4
 # sp_size = 8
 
@@ -38,7 +39,7 @@ model = dict(
     type="STDiT2-XL/2",
     # space_scale=0.5,
     # time_scale=1.0,
-    from_pretrained="./pretrained_models/stdit/OpenSora-STDiT-v2-stage3/model.safetensors",
+    # from_pretrained="./pretrained_models/stdit/OpenSora-STDiT-v2-stage3/model.safetensors",
     input_sq_size=512,  # pretrained model is trained on 512x512
     # enable_sequence_parallelism = True, 
     enable_flashattn=False,
@@ -67,7 +68,7 @@ seed = 42
 outputs = "outputs"
 wandb = False
 
-epochs =  5  
+epochs =  40  
 log_every = 10
 ckpt_every = 300
 load = None
@@ -78,7 +79,8 @@ grad_clip = 1.0
 grad_accm = 2
 
 random_dataset = True # set to False, when u use 
-benchmark_num_steps = 11
-num_ckpt_blocks = 28 # STDIT total 28; bs=16, best 23 or 24;  STDIT2 bs=16, best 23 or 24;
+benchmark_num_steps = 5
+num_ckpt_blocks = 28 # STDIT total 28; bs=16, best 23 or 24; STDIT2 bs=16, best 23 or 24; STDIT2 zero2seq best 5;
 cfg_name = "16x256x256"
+hidden_dim=1536
 # wandb = True

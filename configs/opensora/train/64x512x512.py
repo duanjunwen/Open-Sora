@@ -65,3 +65,4 @@ random_dataset = True
 benchmark_num_steps = 4
 num_ckpt_blocks = 28 # STDIT total 28
 cfg_name = "64x512x512"
+hidden_dim=1024

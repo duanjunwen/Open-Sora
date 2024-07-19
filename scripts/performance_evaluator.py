@@ -382,26 +382,38 @@ class PerformanceEvaluator:
                 self.t5_flop = 8.94
                 self.vae_flop = 34.86 
                 self.stdit_flop = 44.00
+                if cfg.hidden_dim == 1536:
+                    self.stdit_flop = 20
             elif cfg.cfg_name == "16x256x256" and cfg.batch_size==12:
                 self.t5_flop = 13.38
                 self.vae_flop = 52.29 
                 self.stdit_flop = 66.00 
+                if cfg.hidden_dim == 1536:
+                    self.stdit_flop = 29.477
             elif cfg.cfg_name == "16x256x256" and cfg.batch_size==16:
                 self.t5_flop = 29.89  
                 self.vae_flop = 69.73 
                 self.stdit_flop = 88.25 
+                if cfg.hidden_dim == 1536:
+                    self.stdit_flop = 39.9
             elif cfg.cfg_name == "16x512x512"and cfg.batch_size==2:
                 self.t5_flop = 2.23  
                 self.vae_flop = 34.87 
                 self.stdit_flop = 44.23 
+                if cfg.hidden_dim == 1536:
+                    self.stdit_flop = 19.61
             elif cfg.cfg_name == "16x512x512"and cfg.batch_size==4:
                 self.t5_flop = 4.48 
                 self.vae_flop = 69.73 
                 self.stdit_flop = 44.56
+                if cfg.hidden_dim == 1536:
+                    self.stdit_flop = 39.22
             elif cfg.cfg_name == "64x512x512":
                 self.t5_flop = 1.12 
                 self.vae_flop = 69.73   
                 self.stdit_flop = 87.72 
+                if cfg.hidden_dim == 1536:
+                    self.stdit_flop = 78.67
         self.stdit_flop_hfu = self.stdit_flop * 3 + self.stdit_flop * (cfg.num_ckpt_blocks/28) #  1 for fwd + 1 for grad ckpt + 2 for bwd 
         self.stdit_flop = self.stdit_flop * 3 #  1 for fwd + 2 for bwd 
         

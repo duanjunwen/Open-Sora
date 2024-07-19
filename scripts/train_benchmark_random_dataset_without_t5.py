@@ -6,10 +6,7 @@ from pprint import pprint
 import torch
 import torch_musa
 import pandas as pd
-import thop
 import time
-from calflops import calculate_flops
-# import numpy as np
 import torch.distributed as dist
 # import wandb
 import colossalai
@@ -50,7 +47,7 @@ from opensora.models.stdit.stdit2 import STDiT2, STDiT2Block
 
 def register_hooks(module):
     def bwd_hook(module, grad_input, grad_output):
-        torch.musa.synchronize()
+         
         runtime = time.time() - module.backward_start_time
         print(f"stdit {module._name} bwd runtime {runtime * 1000} ms")
         # if 'proj' in module._name:
@@ -130,10 +127,19 @@ def main():
             max_norm=cfg.grad_clip,
         )
         set_data_parallel_group(dist.group.WORLD)
+    elif cfg.plugin == "zero1":
+        plugin = LowLevelZeroPlugin(
+            stage=1,
+            precision=cfg.dtype,
+            initial_scale=2**16,
+            max_norm=cfg.grad_clip,
+        )
+        set_data_parallel_group(dist.group.WORLD)
     elif cfg.plugin == "zero2-seq":
         plugin = ZeroSeqParallelPlugin(
             sp_size=cfg.sp_size,
-            stage=2,
+            # stage=2,
+            stage=1,
             precision=cfg.dtype,
             initial_scale=2**16,
             max_norm=cfg.grad_clip,
@@ -255,7 +261,7 @@ def main():
         hidden_size=model.hidden_size,
         vocab_size=text_encoder_output_dim,
         max_seq_length=512,
-        ignore_steps=2,
+        ignore_steps=3,
         num_steps=cfg.benchmark_num_steps, # epoch * steps 
         use_torch_profiler=False,
         cfg=cfg,
@@ -403,7 +409,7 @@ def main():
             logger.info(f"loss: {loss}\n")
                 
             performance_evaluator.before_backward()
-            booster.backward(loss=loss, optimizer=optimizer)
+            booster.backward(loss=loss, optimizer=optimizer) 
             performance_evaluator.before_optimizer_update()
             optimizer.step()
             optimizer.zero_grad()

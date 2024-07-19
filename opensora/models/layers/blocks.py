@@ -242,7 +242,9 @@ class SeqParallelAttention(Attention):
         # apply all_to_all to gather sequence and split attention heads
         # [B, SUB_N, 3, NUM_HEAD, HEAD_DIM] -> [B, N, 3, NUM_HEAD_PER_DEVICE, HEAD_DIM]
         qkv_shape = qkv.shape
+        # print(f"before alltoall {qkv_shape} ")
         qkv = all_to_all(qkv, sp_group, scatter_dim=3, gather_dim=1)
+        # print(f"after alltoall {qkv.shape} ")
 
         if self.enable_flashattn:
             qkv_permute_shape = (
