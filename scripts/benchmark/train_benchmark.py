@@ -267,8 +267,8 @@ def main():
         cfg=cfg,
         
         # num_steps=22, # epoch * steps 
-        use_torch_profiler=True,
-        torch_profiler_path=f"./profiler/baseline/{plugin}",
+        # use_torch_profiler=True,
+        # torch_profiler_path=f"./profiler/baseline/{plugin}",
     )
     
     # =======================================================
