@@ -136,18 +136,12 @@ class STDiT2Block(nn.Module):
             ).chunk(3, dim=1)
 
         # modulate
-        # empty_mem = torch.musa.memory_allocated()
         x_m = t2i_modulate(self.norm1(x), shift_msa, scale_msa)
         if x_mask is not None:
             x_m_zero = t2i_modulate(self.norm1(x), shift_msa_zero, scale_msa_zero)
             x_m = self.t_mask_select(x_mask, x_m, x_m_zero, T, S)
-        
-        # used_mem, peak_mem = get_mem_info(empty_mem)
-        # print(f"modulate1 mem cost(norm1): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
-
 
         # spatial branch
-        # empty_mem = torch.musa.memory_allocated()
         x_s = rearrange(x_m, "B (T S) C -> (B T) S C", T=T, S=S)
         x_s = self.attn(x_s)
         x_s = rearrange(x_s, "(B T) S C -> B (T S) C", T=T, S=S)
@@ -158,22 +152,14 @@ class STDiT2Block(nn.Module):
         else:
             x_s = gate_msa * x_s
         x = x + self.drop_path(x_s)
-        # used_mem, peak_mem = get_mem_info(empty_mem)
-        # print(f"spatial branch mem cost(attn, drop_path): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
-
 
         # modulate
-        # empty_mem = torch.musa.memory_allocated()
         x_m = t2i_modulate(self.norm_temp(x), shift_tmp, scale_tmp)
         if x_mask is not None:
             x_m_zero = t2i_modulate(self.norm_temp(x), shift_tmp_zero, scale_tmp_zero)
             x_m = self.t_mask_select(x_mask, x_m, x_m_zero, T, S)
-        # used_mem, peak_mem = get_mem_info(empty_mem)
-        # print(f"modulate2 mem cost(norm_temp): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
-
 
         # temporal branch
-        # empty_mem = torch.musa.memory_allocated()
         x_t = rearrange(x_m, "B (T S) C -> (B S) T C", T=T, S=S)
         x_t = self.attn_temp(x_t)
         x_t = rearrange(x_t, "(B S) T C -> B (T S) C", T=T, S=S)
@@ -184,16 +170,9 @@ class STDiT2Block(nn.Module):
         else:
             x_t = gate_tmp * x_t
         x = x + self.drop_path(x_t)
-        # used_mem, peak_mem = get_mem_info(empty_mem)
-        # print(f"temporal branch mem cost(attn_temp, drop_path): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
-
 
         # cross attn
-        # empty_mem = torch.musa.memory_allocated()
         x = x + self.cross_attn(x, y, mask)
-        # used_mem, peak_mem = get_mem_info(empty_mem)
-        # print(f"cross attn mem cost(cross_attn): used_mem: malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
-
 
         # modulate
         # empty_mem = torch.musa.memory_allocated()
@@ -202,9 +181,6 @@ class STDiT2Block(nn.Module):
             x_m_zero = t2i_modulate(self.norm2(x), shift_mlp_zero, scale_mlp_zero)
             x_m = self.t_mask_select(x_mask, x_m, x_m_zero, T, S)
         # used_mem, peak_mem = get_mem_info(empty_mem)
-        # print(f"modulate3 mem cost(norm2): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
-
-
 
         # mlp
         # used_mem, peak_mem = get_mem_info(empty_mem)
@@ -217,8 +193,6 @@ class STDiT2Block(nn.Module):
             x_mlp = gate_mlp * x_mlp
         x = x + self.drop_path(x_mlp)
         # used_mem, peak_mem = get_mem_info(empty_mem)
-        # print(f"mlp mem cost(mlp, drop_path): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
-
         return x
 
 

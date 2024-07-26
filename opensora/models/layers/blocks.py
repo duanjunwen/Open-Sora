@@ -171,18 +171,13 @@ class Attention(nn.Module):
         enable_flashattn = self.enable_flashattn and (N > B)
         qkv = self.qkv(x)
         qkv_shape = (B, N, 3, self.num_heads, self.head_dim)
-        # print(f"self.dim {self.dim} qkv_shape {qkv_shape} B, N, C {B, N, C}")
         qkv = qkv.view(qkv_shape).permute(2, 0, 3, 1, 4)
-        # print(f"qkv_shape permute {qkv.shape}")
         q, k, v = qkv.unbind(0)
         # WARNING: this may be a bug 
-        # start = time.time() 
         if self.rope:
             q = self.rotary_emb(q)
             k = self.rotary_emb(k)
         q, k = self.q_norm(q), self.k_norm(k)
-        # end = time.time() 
-        # print(f"time {(end - start) * 1000 :3f}")
         if enable_flashattn:
             # (B, #heads, N, #dim) -> (B, N, #heads, #dim)
             q = q.permute(0, 2, 1, 3)
@@ -246,9 +241,7 @@ class SeqParallelAttention(Attention):
         # apply all_to_all to gather sequence and split attention heads
         # [B, SUB_N, 3, NUM_HEAD, HEAD_DIM] -> [B, N, 3, NUM_HEAD_PER_DEVICE, HEAD_DIM]
         qkv_shape = qkv.shape
-        # print(f"before alltoall {qkv_shape} ")
         qkv = all_to_all(qkv, sp_group, scatter_dim=3, gather_dim=1)
-        # print(f"after alltoall {qkv.shape} ")
 
         if self.enable_flashattn:
             qkv_permute_shape = (
@@ -621,7 +614,6 @@ class CaptionEmbedder(nn.Module):
 
     def forward(self, caption, train, force_drop_ids=None):
         if train:
-            # print(f"caption {caption.shape[2:]} y_embedding {self.y_embedding.shape}")
             assert caption.shape[2:] == self.y_embedding.shape
         use_dropout = self.uncond_prob > 0
         if (train and use_dropout) or (force_drop_ids is not None):

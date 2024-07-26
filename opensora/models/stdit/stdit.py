@@ -160,8 +160,6 @@ class STDiTBlock(nn.Module):
             x_mlp = gate_mlp * x_mlp
 
         x = x + self.drop_path(x_mlp)
-        # used_mem, peak_mem = get_mem_info(empty_mem)
-        # print(f"mlp mem cost(norm2, mlp, drop_path): malloc_mem(before cal): {empty_mem/1024**3:.2f} GB; used_mem: {used_mem/1024**3:.2f} GB; peak_mem: {peak_mem/1024**3:.2f} GB")
 
         return x
 
