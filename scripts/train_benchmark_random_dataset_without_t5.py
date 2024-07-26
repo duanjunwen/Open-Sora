@@ -261,15 +261,14 @@ def main():
         hidden_size=model.hidden_size,
         vocab_size=text_encoder_output_dim,
         max_seq_length=512,
-        ignore_steps=3,
+        ignore_steps=2,
         num_steps=cfg.benchmark_num_steps, # epoch * steps 
-        use_torch_profiler=False,
+        # use_torch_profiler=False,
         cfg=cfg,
         use_t5=False,
-        # num_steps=22, # epoch * steps 
-        # use_torch_profiler=True,
-        # torch_profiler_path=f"./profiler/{plugin}",
-        # ignore_steps=2,
+         
+        use_torch_profiler=True,
+        torch_profiler_path=f"./profiler/curr_best/{plugin}",
     )
     
     # =======================================================
@@ -465,6 +464,6 @@ def main():
 
     performance_evaluator.on_fit_end()
 
-# torchrun --nnodes=1 --nproc_per_node=8 scripts/train_benchmark_random_dataset_without_t5.py configs/opensora/train/16x256x256.py --data-path /home/dist/hpcai/duanjunwen/Open-Sora/dataset/panda3m/meta/meta_clips_caption_cleaned_text_idx.csv
+# torchrun --nnodes=1 --nproc_per_node=8 scripts/train_benchmark_random_dataset_without_t5.py configs/opensora-v1-1/train/16x256x256.py --data-path /home/dist/hpcai/duanjunwen/Open-Sora/dataset/panda3m/meta/meta_clips_caption_cleaned_text_idx.csv
 if __name__ == "__main__":
     main()

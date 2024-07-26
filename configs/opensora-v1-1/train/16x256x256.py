@@ -26,12 +26,12 @@ num_workers = 4
 dtype = "bf16"
 grad_checkpoint = True
 # plugin = "ddp"
-plugin = "zero1"
+# plugin = "zero1"
 # plugin = "zero2"
-# plugin = "zero2-seq"
-sp_size = 1
+plugin = "zero2-seq"
+# sp_size = 1
 # sp_size = 2
-# sp_size = 4
+sp_size = 4
 # sp_size = 8
 
 # Define model
@@ -41,7 +41,7 @@ model = dict(
     # time_scale=1.0,
     # from_pretrained="./pretrained_models/stdit/OpenSora-STDiT-v2-stage3/model.safetensors",
     input_sq_size=512,  # pretrained model is trained on 512x512
-    # enable_sequence_parallelism = True, 
+    enable_sequence_parallelism = True, 
     enable_flashattn=False,
     enable_layernorm_kernel=False,
 )
@@ -68,12 +68,12 @@ seed = 42
 outputs = "outputs"
 wandb = False
 
-epochs =  40  
+epochs =  1  
 log_every = 10
 ckpt_every = 300
 load = None
 
-batch_size = 8
+batch_size = 16
 lr = 2e-5
 grad_clip = 1.0
 grad_accm = 2

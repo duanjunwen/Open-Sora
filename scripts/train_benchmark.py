@@ -261,15 +261,14 @@ def main():
         hidden_size=model.hidden_size,
         vocab_size=text_encoder.output_dim,
         max_seq_length=512,
-        ignore_steps=4,
-        # num_steps=cfg.benchmark_num_steps, # epoch * steps 
-        num_steps=cfg.epochs * 11, # epoch * steps 
-        use_torch_profiler=False,
+        ignore_steps=2,
+        num_steps=6, # epoch * steps 
+        # num_steps=5, # epoch * steps 
         cfg=cfg,
+        
         # num_steps=22, # epoch * steps 
-        # use_torch_profiler=True,
-        # torch_profiler_path=f"./profiler/{plugin}",
-        # ignore_steps=2,
+        use_torch_profiler=True,
+        torch_profiler_path=f"./profiler/baseline/{plugin}",
     )
     
     # =======================================================

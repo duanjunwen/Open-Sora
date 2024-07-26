@@ -171,14 +171,18 @@ class Attention(nn.Module):
         enable_flashattn = self.enable_flashattn and (N > B)
         qkv = self.qkv(x)
         qkv_shape = (B, N, 3, self.num_heads, self.head_dim)
-
+        # print(f"self.dim {self.dim} qkv_shape {qkv_shape} B, N, C {B, N, C}")
         qkv = qkv.view(qkv_shape).permute(2, 0, 3, 1, 4)
+        # print(f"qkv_shape permute {qkv.shape}")
         q, k, v = qkv.unbind(0)
         # WARNING: this may be a bug 
+        # start = time.time() 
         if self.rope:
             q = self.rotary_emb(q)
             k = self.rotary_emb(k)
         q, k = self.q_norm(q), self.k_norm(k)
+        # end = time.time() 
+        # print(f"time {(end - start) * 1000 :3f}")
         if enable_flashattn:
             # (B, #heads, N, #dim) -> (B, N, #heads, #dim)
             q = q.permute(0, 2, 1, 3)

@@ -176,6 +176,8 @@ pretrained_models/
 evaluation_results/
 cache/
 *.swp
+profiler/
+loss_curve/
 
 # Secret files
 hostfile

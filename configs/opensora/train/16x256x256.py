@@ -16,14 +16,14 @@ num_workers = 4
 dtype = "bf16"
 grad_checkpoint = True
 
-# plugin = "ddp"
+plugin = "ddp"
 # plugin = "zero1"
 # plugin = "zero2"
-plugin = "zero2-seq"
+# plugin = "zero2-seq"
 
-# sp_size = 1
+sp_size = 1
 # sp_size = 2
-sp_size = 4
+# sp_size = 4
 # sp_size = 8
 
 # Define model
@@ -32,7 +32,7 @@ model = dict(
     space_scale=0.5,
     time_scale=1.0,
     # from_pretrained="./pretrained_models/stdit/OpenSora/OpenSora-v1-16x256x256.pth",
-    enable_sequence_parallelism = True,
+    # enable_sequence_parallelism = True,
     enable_flashattn=True,
     enable_layernorm_kernel=False,
 )
@@ -64,7 +64,7 @@ log_every = 10
 ckpt_every = 300
 load = None
 
-batch_size = 16
+batch_size = 8
 lr = 2e-5
 grad_clip = 1.0
 num_steps = 2 # grad accum step
