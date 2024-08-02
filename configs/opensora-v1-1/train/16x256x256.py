@@ -5,6 +5,7 @@ dataset = dict(
     num_frames=16,
     frame_interval=3,
     image_size=(256, 256),
+    # t5_offline=True, 
 )
 
 mask_ratios = {
@@ -73,10 +74,16 @@ log_every = 10
 ckpt_every = 300
 load = None
 
-batch_size = 16
-lr = 2e-5
+epochs =  20  
+log_every = 10
+ckpt_every = 300
+load = None
+
+batch_size = 8
+lr = 2e-5 # [4e-5, 2e-4], 4e-5 # last 2e-5, 1e-5, 4e-5
 grad_clip = 1.0
 grad_accm = 2
+total_steps = 400
 
 random_dataset = True # set to False, when u use 
 benchmark_num_steps = 5

@@ -96,9 +96,9 @@ class VideoTextDataset(torch.utils.data.Dataset):
         # TCHW -> CTHW
         video = video.permute(1, 0, 2, 3)
         if self.t5_offline: 
-            return {"video": video, "text": text, "model_arg":model_arg}
+            return {"video": video, "text": text, "model_arg":model_arg, "path":path}
         else:
-            return {"video": video, "text": text}
+            return {"video": video, "text": text, "path":path}
 
     def __getitem__(self, index):
         for _ in range(10):
