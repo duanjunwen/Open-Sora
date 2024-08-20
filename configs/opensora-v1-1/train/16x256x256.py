@@ -28,7 +28,6 @@ dtype = "bf16"
 grad_checkpoint = True
 # plugin = "ddp"
 # plugin = "zero1"
-# plugin = "zero2"
 plugin = "zero2-seq"
 # sp_size = 1
 # sp_size = 2
@@ -43,6 +42,7 @@ model = dict(
     # from_pretrained="./pretrained_models/stdit/OpenSora-STDiT-v2-stage3/model.safetensors",
     input_sq_size=512,  # pretrained model is trained on 512x512
     enable_sequence_parallelism = True, 
+    # enable_sequence_parallelism = False, 
     enable_flashattn=False,
     enable_layernorm_kernel=False,
 )
@@ -82,8 +82,8 @@ load = None
 batch_size = 8
 lr = 2e-5 # [4e-5, 2e-4], 4e-5 # last 2e-5, 1e-5, 4e-5
 grad_clip = 1.0
-grad_accm = 2
-total_steps = 400
+grad_accm = 4
+total_steps = 1200
 
 random_dataset = True # set to False, when u use 
 benchmark_num_steps = 5

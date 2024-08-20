@@ -14,7 +14,7 @@ from colossalai.booster.plugin import TorchDDPPlugin
 from colossalai.booster.plugin import TorchFSDPPlugin
 from colossalai.cluster import DistCoordinator
 from colossalai.nn.optimizer import HybridAdam
-# from torch.optim import Adam, AdamW
+from torch.optim import Adam, AdamW
 # from colossalai.utils import get_current_device, set_seed
 from colossalai.utils import get_current_device
 # from tqdm import tqdm
@@ -22,7 +22,7 @@ from colossalai.utils import get_current_device
 import tqdm
 import functools
 from functools import partial
-
+from random import randint
 from performance_evaluator import PerformanceEvaluator
 from opensora.acceleration.checkpoint import set_grad_checkpoint
 from opensora.acceleration.parallel_states import (
@@ -99,8 +99,8 @@ def main():
     dist.init_process_group(backend="mccl", timeout=timedelta(hours=24))
     # torch.musa.set_device(dist.get_rank() % torch.musa.device_count())
     torch.musa.set_device(dist.get_rank() % torch.musa.device_count())
-    # set_seed(42)
-    set_seed(3407)
+    # seed = randint(1000, 9999)
+    # set_seed(seed)
     coordinator = DistCoordinator()
     device = get_current_device()  # device musa:0
     dtype = to_torch_dtype(cfg.dtype)
@@ -156,6 +156,15 @@ def main():
         raise ValueError(f"Unknown plugin {cfg.plugin}")
     booster = Booster(plugin=plugin)
     
+    # seed = torch.randint(low=1000, high=9999, size=(1,)).musa()
+    # dist.broadcast(tensor=seed, src=0)
+    # torch.musa.synchronize() 
+    # seed = int(seed[0])
+    # print(f"seed {seed}")
+    # set_seed(seed)
+    
+    seed = 42 # 42
+    set_seed(seed)
     # ======================================================
     # 3. build dataset and dataloader
     # ======================================================
@@ -165,8 +174,8 @@ def main():
         dataset=dataset,
         batch_size=cfg.batch_size,
         num_workers=cfg.num_workers,
-        seed=cfg.seed,
-        shuffle=True,
+        seed=seed,
+        shuffle=False,
         drop_last=True,
         pin_memory=True,
         process_group=get_data_parallel_group(),
@@ -222,18 +231,20 @@ def main():
     scheduler = build_module(cfg.scheduler, SCHEDULERS)
 
     # 4.5. setup optimizer
-    optimizer = HybridAdam(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=cfg.lr,
-        weight_decay=0,
-        adamw_mode=True,
-    )
-    
-    # optimizer = Adam(
+    # optimizer = HybridAdam(
     #     filter(lambda p: p.requires_grad, model.parameters()),
     #     lr=cfg.lr,
     #     weight_decay=0,
+    #     adamw_mode=True,
     # )
+    
+    optimizer = AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=cfg.lr,
+        betas=(0.9, 0.999), 
+        eps=1e-08,
+        weight_decay=0,
+    )
     
     lr_scheduler = None
 
@@ -363,17 +374,15 @@ def main():
         # Video info
         for k, v in batch.items():
             if k not in ['video', 'text', 'model_arg']:
-                # print(f" key {k} val {v}")
                 model_args[k] = v.to(device, dtype)
-                    
         # Diffusion
         t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
         if cfg.model["type"] == "STDiT2-XL/2":
-            model_args['num_frames'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
-            model_args['height'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
-            model_args['width'] = torch.randn(cfg.batch_size, dtype=dtype).to(device)
-            model_args['ar'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
-            model_args['fps'] = torch.randn(cfg.batch_size, dtype=dtype).to(device)
+            model_args['num_frames'] = batch.pop("num_frames").to(device)
+            model_args['height'] = batch.pop("height").to(device)
+            model_args['width'] = batch.pop("width").to(device)
+            model_args['ar'] = batch.pop("ar").to(device)
+            model_args['fps'] = batch.pop("fps").to(device)
         performance_evaluator.before_forward()
         loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
         # Backward & update
@@ -426,7 +435,7 @@ def main():
             'path': path_list,
             'loss': loss_list,
             })
-    df.to_csv(f"./loss_curve/nv_loss_curve_{device}_{datetime.now()}.csv",index=False)
+    df.to_csv(f"./loss_curve/musa_loss_curve_{device}_{datetime.now()}.csv",index=False)
 
     performance_evaluator.on_fit_end()
 

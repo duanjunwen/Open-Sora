@@ -328,7 +328,6 @@ class STDiT2(nn.Module):
         x = x.to(dtype)
         timestep = timestep.to(dtype)
         y = y.to(dtype)
-
         # === process data info ===
         # 1. get dynamic size
         hw = torch.cat([height[:, None], width[:, None]], dim=1)

@@ -67,6 +67,12 @@ class VideoTextDataset(torch.utils.data.Dataset):
         sample = self.data.iloc[index]
         path = sample["path"]
         text = sample["text"]
+        num_frames = sample["num_frames"] 
+        height = sample["height"] 
+        width = sample["width"]
+        ar = height / width
+        video_fps = 24  # default fps
+        
         if self.t5_offline: 
             text_idx = sample["text_idx"]
             model_arg = self.model_arg_data[text_idx]
@@ -96,9 +102,26 @@ class VideoTextDataset(torch.utils.data.Dataset):
         # TCHW -> CTHW
         video = video.permute(1, 0, 2, 3)
         if self.t5_offline: 
-            return {"video": video, "text": text, "model_arg":model_arg, "path":path}
+            return {"video": video, 
+                    "text": text, 
+                    "model_arg":model_arg, 
+                    "path":path,
+                    "num_frames": num_frames,
+                    "height": height,
+                    "width": width,
+                    "ar": ar,
+                    "fps": video_fps,
+                    }
         else:
-            return {"video": video, "text": text, "path":path}
+            return {"video": video, 
+                    "text": text, 
+                    "path":path,
+                    "num_frames": num_frames,
+                    "height": height,
+                    "width": width,
+                    "ar": ar,
+                    "fps": video_fps,
+                    }
 
     def __getitem__(self, index):
         for _ in range(10):
@@ -141,12 +164,15 @@ class VariableVideoTextDataset(VideoTextDataset):
 
     def getitem(self, index):
         # a hack to pass in the (time, height, width) info from sampler
-        index, num_frames, height, width = [int(val) for val in index.split("-")]
+        # index, num_frames, height, width = [int(val) for val in index.split("-")]
 
         sample = self.data.iloc[index]
         path = sample["path"]
         text = sample["text"]
         text_idx = sample["text_idx"]
+        num_frames = sample["num_frames"] 
+        height = sample["height"] 
+        width = sample["width"]
         model_arg = self.model_arg_data[text_idx]
         file_type = self.get_type(path)
         ar = height / width
