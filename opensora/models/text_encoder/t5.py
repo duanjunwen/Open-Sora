@@ -26,7 +26,6 @@ import re
 
 import ftfy
 import torch
-import torch_musa
 import torch.nn as nn
 from transformers import AutoTokenizer, T5EncoderModel
 
@@ -243,7 +242,7 @@ class T5Embedder(nn.Module):
 #         from_pretrained=None,
 #         model_max_length=120,
 #         # device="cuda",
-#         device="musa",
+#         device="cuda",
 #         dtype=torch.float,
 #         cache_dir=None,
 #         shardformer=False,
@@ -308,7 +307,7 @@ class T5Encoder(nn.Module):
         self,
         from_pretrained=None,
         model_max_length=120,
-        device="musa",
+        device="cuda",
         dtype=torch.bfloat16,
         cache_dir=None,
         shardformer=False,

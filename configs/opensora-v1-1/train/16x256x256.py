@@ -36,7 +36,8 @@ sp_size = 4
 
 # Define model
 model = dict(
-    type="STDiT2-XL/2",
+    # type="STDiT2-XL/2",
+    type="STDiT2ACC-XL/2",
     # space_scale=0.5,
     # time_scale=1.0,
     # from_pretrained="./pretrained_models/stdit/OpenSora-STDiT-v2-stage3/model.safetensors",
@@ -50,11 +51,13 @@ model = dict(
 vae = dict(
     type="VideoAutoencoderKL",
     from_pretrained="./pretrained_models/stabilityai/sd-vae-ft-ema",
+    # from_pretrained=None,
 )
 
 text_encoder = dict(
     type="t5",
     from_pretrained="./pretrained_models/t5_ckpts/t5-v1_1-xxl",
+    # from_pretrained=None,
     model_max_length=200,
     shardformer=True,
     local_files_only=True,
@@ -74,16 +77,16 @@ log_every = 10
 ckpt_every = 300
 load = None
 
-epochs =  20  
+epochs =  1  
 log_every = 10
 ckpt_every = 300
 load = None
 
-batch_size = 8
+batch_size = 1
 lr = 2e-5 # [4e-5, 2e-4], 4e-5 # last 2e-5, 1e-5, 4e-5
 grad_clip = 1.0
 grad_accm = 4
-total_steps = 1200
+total_steps = 5
 
 random_dataset = True # set to False, when u use 
 benchmark_num_steps = 5

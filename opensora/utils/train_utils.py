@@ -3,7 +3,6 @@ import random
 from collections import OrderedDict
 from colossalai.zero import LowLevelZeroOptimizer
 import torch
-import torch_musa
 import numpy as np
 import torch.distributed as dist
 from opensora.acceleration.parallel_states import get_data_parallel_group
@@ -179,7 +178,7 @@ def set_seed(seed):
     random.seed(seed)                          
     np.random.seed(seed)                       
     torch.manual_seed(seed)                    
-    torch.musa.manual_seed(seed)               
-    torch.musa.manual_seed_all(seed)     
+    torch.cuda.manual_seed(seed)               
+    torch.cuda.manual_seed_all(seed)     
     # torch.backends.cudnn.deterministic = True 
    

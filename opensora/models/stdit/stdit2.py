@@ -31,10 +31,10 @@ from opensora.registry import MODELS
 from opensora.utils.ckpt_utils import load_checkpoint
 
 def get_mem_info(empty_mem):
-    torch.musa.synchronize()
-    torch.musa.empty_cache()
-    peak_mem = torch.musa.max_memory_allocated() - empty_mem
-    final_mem = torch.musa.memory_allocated()
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    peak_mem = torch.cuda.max_memory_allocated() - empty_mem
+    final_mem = torch.cuda.memory_allocated()
     used_mem = final_mem - empty_mem
     return used_mem, peak_mem
 
@@ -88,14 +88,6 @@ class STDiT2Block(nn.Module):
 
         # temporal branch
         self.norm_temp = get_layernorm(hidden_size, eps=1e-6, affine=False, use_kernel=enable_layernorm_kernel)  # new
-        # self.attn_temp = self.attn_cls(
-        #     hidden_size,
-        #     num_heads=num_heads,
-        #     qkv_bias=True,
-        #     # enable_flashattn=self.enable_flashattn,
-        #     rope=rope,
-        #     qk_norm=qk_norm,
-        # )
         
         self.attn_temp = Attention(
             hidden_size,
@@ -175,7 +167,7 @@ class STDiT2Block(nn.Module):
         x = x + self.cross_attn(x, y, mask)
 
         # modulate
-        # empty_mem = torch.musa.memory_allocated()
+        # empty_mem = torch.cuda.memory_allocated()
         x_m = t2i_modulate(self.norm2(x), shift_mlp, scale_mlp)
         if x_mask is not None:
             x_m_zero = t2i_modulate(self.norm2(x), shift_mlp_zero, scale_mlp_zero)
@@ -360,8 +352,6 @@ class STDiT2(nn.Module):
         # x = rearrange(x, "B T S C -> B (T S) C")
 
         # # shard over the sequence dim if sp is enabled
-        # if self.enable_sequence_parallelism:
-        #     x = split_forward_gather_backward(x, get_sequence_parallel_group(), dim=1, grad_scale="down")
         if self.enable_sequence_parallelism:
             x = split_forward_gather_backward(x, get_sequence_parallel_group(), dim=2, grad_scale="down")
             S = S // dist.get_world_size(get_sequence_parallel_group())
@@ -415,10 +405,6 @@ class STDiT2(nn.Module):
                 T,
                 S,
             )
-
-        # if self.enable_sequence_parallelism:
-        #     x = gather_forward_split_backward(x, get_sequence_parallel_group(), dim=1, grad_scale="up")
-        # # x.shape: [B, N, C]
         
         if self.enable_sequence_parallelism:
             x = rearrange(x, "B (T S) C -> B T S C", T=T, S=S)

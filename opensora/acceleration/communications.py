@@ -166,7 +166,7 @@ def _gather(input_, pg: dist.ProcessGroup, dim=-1):
 
     # all gather
     tensor_list = [torch.empty_like(input_) for _ in range(world_size)]
-    assert input_.device.type == "cuda" or input_.device.type == "musa"
+    assert input_.device.type == "cuda"
     torch.distributed.all_gather(tensor_list, input_, group=pg)
 
     # concat

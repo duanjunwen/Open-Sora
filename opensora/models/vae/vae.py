@@ -1,5 +1,4 @@
 import torch
-import torch_musa
 import torch.nn as nn
 from diffusers.models import AutoencoderKL, AutoencoderKLTemporalDecoder
 from einops import rearrange

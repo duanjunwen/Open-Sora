@@ -16,7 +16,6 @@ from typing import Optional
 
 import numpy as np
 import torch
-import torch_musa
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
@@ -30,7 +29,7 @@ from opensora.acceleration.communications import all_to_all, split_forward_gathe
 from opensora.acceleration.parallel_states import get_sequence_parallel_group
 
 # approx_gelu = lambda: nn.GELU(approximate="tanh")
-approx_gelu = lambda: nn.GELU(approximate="none") #  Musa GELU op only support approximate is None now!
+approx_gelu = lambda: nn.GELU(approximate="none") #  cuda GELU op only support approximate is None now!
 
 class LlamaRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
@@ -584,7 +583,7 @@ class CaptionEmbedder(nn.Module):
     ):
         super().__init__()
         # act_layer.approximate = "tanh"
-        act_layer.approximate = "none" # Musa GELU op only support approximate is None now!
+        act_layer.approximate = "none" # cuda GELU op only support approximate is None now!
         self.y_proj = Mlp(
             in_features=in_channels,
             hidden_features=hidden_size,
@@ -604,7 +603,7 @@ class CaptionEmbedder(nn.Module):
         """
         if force_drop_ids is None:
             # drop_ids = torch.rand(caption.shape[0]).cuda() < self.uncond_prob
-            drop_ids = torch.rand(caption.shape[0]).to(device="musa") < self.uncond_prob
+            drop_ids = torch.rand(caption.shape[0]).to(device="cuda") < self.uncond_prob
         else:
             drop_ids = force_drop_ids == 1
         y_embedding_repeat = self.y_embedding.repeat(caption.shape[0], 1, 1, 1)  # broadcast y_embedding[120, 4096] to shape caption[BatchSize, 1, 120, 4096]
@@ -648,10 +647,8 @@ class PositionEmbedding2D(nn.Module):
         base_size: Optional[int] = None,
     ):
         # 1)RuntimeError: Unsupported tensor dtype: ComplexDouble; cause scale: complex; 2)TypeError: can't convert complex to float
-        # grid_h = torch.arange(h, device=device) / scale
-        # grid_w = torch.arange(w, device=device) / scale
-        grid_h = torch.arange(h, device=device) 
-        grid_w = torch.arange(w, device=device) 
+        grid_h = torch.arange(h, device=device) / scale
+        grid_w = torch.arange(w, device=device) / scale 
         if base_size is not None:
             grid_h *= base_size / h
             grid_w *= base_size / w

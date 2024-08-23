@@ -15,7 +15,6 @@ from typing import Callable, List
 
 import numpy as np
 import torch
-import torch_musa
 from einops import rearrange
 
 from .diffusion_utils import discretized_gaussian_log_likelihood, normal_kl
@@ -165,14 +164,12 @@ class GaussianDiffusion:
     """
 
     def __init__(
-        self, *, betas: torch.Tensor, model_mean_type: str, model_var_type: str, loss_type: str, device: str = "musa"
+        self, *, betas: torch.Tensor, model_mean_type: str, model_var_type: str, loss_type: str, device: str = "cuda"
     ):
         if device == "cuda":
             device = torch.device(f"cuda:{torch.cuda.current_device()}")
         elif device == "cpu":
             device = torch.device("cpu")
-        elif device == "musa":
-            device = torch.device(f"musa:{torch.musa.current_device()}")
         else:
             raise ValueError(f"Unknown device: {device}")
         self.device = device

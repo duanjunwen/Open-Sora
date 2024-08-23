@@ -19,6 +19,7 @@ from torch.optim import Adam, AdamW
 from colossalai.utils import get_current_device
 # from tqdm import tqdm
 # from tqdm import trange
+from wonderwords import RandomWord, RandomSentence
 import tqdm
 import functools
 from functools import partial
@@ -246,6 +247,8 @@ def main():
         weight_decay=0,
     )
     
+    s = RandomSentence()
+    
     lr_scheduler = None
 
     # 4.6. prepare for training
@@ -331,7 +334,7 @@ def main():
         module._name = name
     
     loss_list = list()
-    path_list = list()
+    # path_list = list()
     # model.apply(register_hooks)
     # if cfg.random_dataset:
     #     num_steps_per_epoch = cfg.benchmark_num_steps
@@ -349,14 +352,18 @@ def main():
                 yield batch
             epoch += 1
     
-    dataloader_iter = cyclic_iter(dataloader)
+    # dataloader_iter = cyclic_iter(dataloader)
     for step in tqdm.trange(cfg.total_steps, desc='Step', disable=not coordinator.is_master()):
         performance_evaluator.start_new_iter()
-        batch = next(dataloader_iter)
+        # batch = next(dataloader_iter)
         # for step, batch in pbar:
-        x = batch.pop("video").to(device, dtype)  # [B, C, T, H, W]
-        y = batch.pop("text")
-        path = batch.pop("path")
+        # x = batch.pop("video").to(device, dtype)  # [B, C, T, H, W]
+        # y = batch.pop("text")
+        # path = batch.pop("path")
+        x = torch.randn(cfg.batch_size, 3, cfg.dataset["num_frames"], cfg.dataset["image_size"][0], cfg.dataset["image_size"][1], dtype=dtype).to(device)  # (B, C, T, H, W) 
+        y = [s.simple_sentence() for _ in range(cfg.batch_size)]   
+        
+        
         # Visual and text encoding
         with torch.no_grad():
             # Prepare visual inputs
@@ -372,17 +379,23 @@ def main():
         else:
             mask = None
         # Video info
-        for k, v in batch.items():
-            if k not in ['video', 'text', 'model_arg']:
-                model_args[k] = v.to(device, dtype)
+        # for k, v in batch.items():
+        #     if k not in ['video', 'text', 'model_arg']:
+        #         model_args[k] = v.to(device, dtype)
         # Diffusion
         t = torch.randint(0, scheduler.num_timesteps, (x.shape[0],), device=device)
-        if cfg.model["type"] == "STDiT2-XL/2":
-            model_args['num_frames'] = batch.pop("num_frames").to(device)
-            model_args['height'] = batch.pop("height").to(device)
-            model_args['width'] = batch.pop("width").to(device)
-            model_args['ar'] = batch.pop("ar").to(device)
-            model_args['fps'] = batch.pop("fps").to(device)
+        if cfg.model["type"] == "STDiT2-XL/2" or cfg.model["type"] == "STDiT2ACC-XL/2":
+            # model_args['num_frames'] = batch.pop("num_frames").to(device)
+            # model_args['height'] = batch.pop("height").to(device)
+            # model_args['width'] = batch.pop("width").to(device)
+            # model_args['ar'] = batch.pop("ar").to(device)
+            # model_args['fps'] = batch.pop("fps").to(device)
+            model_args['num_frames'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
+            model_args['height'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
+            model_args['width'] = torch.randn(cfg.batch_size, dtype=dtype).to(device)
+            model_args['ar'] = torch.randn(cfg.batch_size, dtype=dtype).to(device) 
+            model_args['fps'] = torch.randn(cfg.batch_size, dtype=dtype).to(device)
+            
         performance_evaluator.before_forward()
         loss_dict = scheduler.training_losses(model, x, t, model_args, mask=mask)
         # Backward & update
@@ -404,7 +417,7 @@ def main():
             logger.info(f"loss: {loss}\n")
             # if coordinator.is_master():
             loss_list.append(float(loss.to('cpu')))
-            path_list.append(path)
+            # path_list.append(path)
                     
             running_loss += loss.item()
             log_step += 1
@@ -432,13 +445,13 @@ def main():
         
     # if coordinator.is_master():
     df = pd.DataFrame({
-            'path': path_list,
+            # 'path': path_list,
             'loss': loss_list,
             })
     df.to_csv(f"./loss_curve/cuda_loss_curve_{device}_{datetime.now()}.csv",index=False)
 
     performance_evaluator.on_fit_end()
 
-# torchrun --nnodes=1 --nproc_per_node=8 scripts/train_benchmark.py configs/opensora-v1-1/train/16x256x256.py --data-path ./dataset/panda_train/meta/meta_clips_caption_cleaned_fixed.csv
+#  torchrun --nnodes=1 --nproc_per_node=4 scripts/train_benchmark_accum_random_dataset.py configs/opensora-v1-1/train/16x256x256.py --data-path ./dataset/panda_train_2/meta/meta_clips_caption_cleaned_fixed_rm5_format.csv 
 if __name__ == "__main__":
     main()

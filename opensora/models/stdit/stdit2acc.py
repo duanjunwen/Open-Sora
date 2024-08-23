@@ -1,8 +1,10 @@
+import time
 import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 from einops import rearrange
+from rotary_embedding_torch import RotaryEmbedding
 from timm.models.layers import DropPath
 from timm.models.vision_transformer import Mlp
 
@@ -14,38 +16,51 @@ from opensora.models.layers.blocks import (
     CaptionEmbedder,
     MultiHeadCrossAttention,
     PatchEmbed3D,
+    PositionEmbedding2D,
     SeqParallelAttention,
     SeqParallelMultiHeadCrossAttention,
+    SizeEmbedder,
     T2IFinalLayer,
     TimestepEmbedder,
     approx_gelu,
-    get_1d_sincos_pos_embed,
     get_2d_sincos_pos_embed,
     get_layernorm,
     t2i_modulate,
 )
 from opensora.registry import MODELS
 from opensora.utils.ckpt_utils import load_checkpoint
+from opensora.acceleration.communications import all_to_all, split_forward_gather_backward
+from opensora.acceleration.parallel_states import get_sequence_parallel_group
+
+def get_mem_info(empty_mem):
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    peak_mem = torch.cuda.max_memory_allocated() - empty_mem
+    final_mem = torch.cuda.memory_allocated()
+    used_mem = final_mem - empty_mem
+    return used_mem, peak_mem
 
 
-class STDiTBlock(nn.Module):
+class STDiT2ACCBlock(nn.Module):
     def __init__(
         self,
         hidden_size,
         num_heads,
-        d_s=None,
-        d_t=None,
         mlp_ratio=4.0,
         drop_path=0.0,
         enable_flashattn=False,
         enable_layernorm_kernel=False,
         enable_sequence_parallelism=False,
+        rope=None,
+        qk_norm=False,
     ):
         super().__init__()
+        self.num_heads=num_heads
         self.hidden_size = hidden_size
         self.enable_flashattn = enable_flashattn
         self._enable_sequence_parallelism = enable_sequence_parallelism
-        self.backward_start_time = 0.0
+
+        # assert not self._enable_sequence_parallelism, "Sequence parallelism is not supported."
         if enable_sequence_parallelism:
             self.attn_cls = SeqParallelAttention
             self.mha_cls = SeqParallelMultiHeadCrossAttention
@@ -53,121 +68,159 @@ class STDiTBlock(nn.Module):
             self.attn_cls = Attention
             self.mha_cls = MultiHeadCrossAttention
 
+        # spatial branch
         self.norm1 = get_layernorm(hidden_size, eps=1e-6, affine=False, use_kernel=enable_layernorm_kernel)
         self.attn = self.attn_cls(
             hidden_size,
             num_heads=num_heads,
             qkv_bias=True,
             enable_flashattn=enable_flashattn,
+            qk_norm=qk_norm,
         )
+        self.scale_shift_table = nn.Parameter(torch.randn(6, hidden_size) / hidden_size**0.5)
+
+        # cross attn
         self.cross_attn = self.mha_cls(hidden_size, num_heads)
+
+        # mlp branch
         self.norm2 = get_layernorm(hidden_size, eps=1e-6, affine=False, use_kernel=enable_layernorm_kernel)
         self.mlp = Mlp(
             in_features=hidden_size, hidden_features=int(hidden_size * mlp_ratio), act_layer=approx_gelu, drop=0
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
-        self.scale_shift_table = nn.Parameter(torch.randn(6, hidden_size) / hidden_size**0.5)
 
-        # temporal attention
-        self.d_s = d_s
-        self.d_t = d_t
-
-        if self._enable_sequence_parallelism:
-            sp_size = dist.get_world_size(get_sequence_parallel_group())
-            # # make sure d_t is divisible by sp_size
-            # assert d_t % sp_size == 0
-            # self.d_t = d_t // sp_size
-            # make sure d_t is divisible by sp_size
-            assert d_s % sp_size == 0
-            self.d_s = d_s // sp_size
-
-        # self.attn_temp = self.attn_cls(
-        #     hidden_size,
-        #     num_heads=num_heads,
-        #     qkv_bias=True,
-        #     enable_flashattn=self.enable_flashattn,
-        # )
+        # temporal branch
+        self.norm_temp = get_layernorm(hidden_size, eps=1e-6, affine=False, use_kernel=enable_layernorm_kernel)  # new
+        
         self.attn_temp = Attention(
             hidden_size,
             num_heads=num_heads,
             qkv_bias=True,
             enable_flashattn=self.enable_flashattn,
+            rope=rope,
+            qk_norm=qk_norm,
         )
+        
+        
+        self.scale_shift_table_temporal = nn.Parameter(torch.randn(3, hidden_size) / hidden_size**0.5)  # new
 
-    def t_mask_select(self, x, masked_x, x_mask):
+    def t_mask_select(self, x_mask, x, masked_x, T, S):
         # x: [B, (T, S), C]
         # mased_x: [B, (T, S), C]
         # x_mask: [B, T]
-        x = rearrange(x, "B (T S) C -> B T S C", T=self.d_t, S=self.d_s)
-        masked_x = rearrange(masked_x, "B (T S) C -> B T S C", T=self.d_t, S=self.d_s)
+        x = rearrange(x, "B (T S) C -> B T S C", T=T, S=S)
+        masked_x = rearrange(masked_x, "B (T S) C -> B T S C", T=T, S=S)
         x = torch.where(x_mask[:, :, None, None], x, masked_x)
         x = rearrange(x, "B T S C -> B (T S) C")
         return x
 
-    def forward(self, x, y, t, mask=None, tpe=None, x_mask=None, t0=None):        
+    def forward(self, x, y, t, t_tmp, mask=None, x_mask=None, t0=None, t0_tmp=None, T=None, S=None):
         B, N, C = x.shape
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.scale_shift_table[None] + t.reshape(B, 6, -1)
         ).chunk(6, dim=1)
-        x_m = t2i_modulate(self.norm1(x), shift_msa, scale_msa)
+        shift_tmp, scale_tmp, gate_tmp = (self.scale_shift_table_temporal[None] + t_tmp.reshape(B, 3, -1)).chunk(
+            3, dim=1
+        )
         if x_mask is not None:
             shift_msa_zero, scale_msa_zero, gate_msa_zero, shift_mlp_zero, scale_mlp_zero, gate_mlp_zero = (
                 self.scale_shift_table[None] + t0.reshape(B, 6, -1)
             ).chunk(6, dim=1)
+            shift_tmp_zero, scale_tmp_zero, gate_tmp_zero = (
+                self.scale_shift_table_temporal[None] + t0_tmp.reshape(B, 3, -1)
+            ).chunk(3, dim=1)
+
+        # modulate
+        x_m = t2i_modulate(self.norm1(x), shift_msa, scale_msa)
+        if x_mask is not None:
             x_m_zero = t2i_modulate(self.norm1(x), shift_msa_zero, scale_msa_zero)
-            x_m = self.t_mask_select(x_m, x_m_zero, x_mask)
+            x_m = self.t_mask_select(x_mask, x_m, x_m_zero, T, S)
 
-        # spatial branch
-        x_s = rearrange(x_m, "B (T S) C -> (B T) S C", T=self.d_t, S=self.d_s)
+        # # spatial branch
+        # x_s = rearrange(x_m, "B (T S) C -> (B T) S C", T=T, S=S)
+        # x_s = self.attn(x_s)
+        # x_s = rearrange(x_s, "(B T) S C -> B (T S) C", T=T, S=S)
+        # if x_mask is not None:
+        #     x_s_zero = gate_msa_zero * x_s
+        #     x_s = gate_msa * x_s
+        #     x_s = self.t_mask_select(x_mask, x_s, x_s_zero, T, S)
+        # else:
+        #     x_s = gate_msa * x_s
+        # x = x + self.drop_path(x_s)
+        
+        # self.hidden_size 1536, N=num_head 24; --> D=head dim=64
+        # new spatial branch
+        # C(self.hidden_size 1536) = N(self.num_head 24) * D (head dim=64)
+        
+        # [B, T*S/P, N*D] ->  [B*T, S/P, N*D] 
+        x_s = rearrange(x_m, "B (T S) C -> (B T) S C", T=T, S=S) # C=N*D
+        
+        # [B*T, S/P, N*D] -> [B*T, S/P, N, D] WHERE N=(self.num_head 24) , D=(head dim=64)
+        x_s = x_s.reshape(B*T, S, self.num_heads, self.hidden_size//self.num_heads)
+        
+        #  [B*T, S/P, N, D] -alltoall-> [B*T, S, N/P, D]
+        sp_group = get_sequence_parallel_group()
+        x_s = all_to_all(x_s, sp_group, scatter_dim=2, gather_dim=1)
+
         x_s = self.attn(x_s)
-        x_s = rearrange(x_s, "(B T) S C -> B (T S) C", T=self.d_t, S=self.d_s)
-
+        x_s = rearrange(x_s, "(B T) S C -> B (T S) C", T=T, S=S)
         if x_mask is not None:
             x_s_zero = gate_msa_zero * x_s
             x_s = gate_msa * x_s
-            x_s = self.t_mask_select(x_s, x_s_zero, x_mask)
+            x_s = self.t_mask_select(x_mask, x_s, x_s_zero, T, S)
         else:
             x_s = gate_msa * x_s
-
         x = x + self.drop_path(x_s)
 
+        # modulate
+        x_m = t2i_modulate(self.norm_temp(x), shift_tmp, scale_tmp)
+        if x_mask is not None:
+            x_m_zero = t2i_modulate(self.norm_temp(x), shift_tmp_zero, scale_tmp_zero)
+            x_m = self.t_mask_select(x_mask, x_m, x_m_zero, T, S)
+
         # temporal branch
-        x_t = rearrange(x, "B (T S) C -> (B S) T C", T=self.d_t, S=self.d_s)
-        if tpe is not None:
-            x_t = x_t + tpe
+        x_t = rearrange(x_m, "B (T S) C -> (B S) T C", T=T, S=S)
         x_t = self.attn_temp(x_t)
-        x_t = rearrange(x_t, "(B S) T C -> B (T S) C", T=self.d_t, S=self.d_s)
-        x = x + self.drop_path(gate_msa * x_t)
+        x_t = rearrange(x_t, "(B S) T C -> B (T S) C", T=T, S=S)
+        if x_mask is not None:
+            x_t_zero = gate_tmp_zero * x_t
+            x_t = gate_tmp * x_t
+            x_t = self.t_mask_select(x_mask, x_t, x_t_zero, T, S)
+        else:
+            x_t = gate_tmp * x_t
+        x = x + self.drop_path(x_t)
 
         # cross attn
-        if mask is not None:
-            mask = mask.bool()
         x = x + self.cross_attn(x, y, mask)
 
-        # mlp
+        # modulate
+        # empty_mem = torch.cuda.memory_allocated()
         x_m = t2i_modulate(self.norm2(x), shift_mlp, scale_mlp)
         if x_mask is not None:
             x_m_zero = t2i_modulate(self.norm2(x), shift_mlp_zero, scale_mlp_zero)
-            x_m = self.t_mask_select(x_m, x_m_zero, x_mask)
+            x_m = self.t_mask_select(x_mask, x_m, x_m_zero, T, S)
+        # used_mem, peak_mem = get_mem_info(empty_mem)
 
+        # mlp
+        # used_mem, peak_mem = get_mem_info(empty_mem)
         x_mlp = self.mlp(x_m)
         if x_mask is not None:
             x_mlp_zero = gate_mlp_zero * x_mlp
             x_mlp = gate_mlp * x_mlp
-            x_mlp = self.t_mask_select(x_mlp, x_mlp_zero, x_mask)
+            x_mlp = self.t_mask_select(x_mask, x_mlp, x_mlp_zero, T, S)
         else:
             x_mlp = gate_mlp * x_mlp
-
         x = x + self.drop_path(x_mlp)
-
+        # used_mem, peak_mem = get_mem_info(empty_mem)
         return x
 
 
 @MODELS.register_module()
-class STDiT(nn.Module):
+class STDiT2ACC(nn.Module):
     def __init__(
         self,
-        input_size=(1, 32, 32),
+        input_size=(None, None, None),
+        input_sq_size=32,
         in_channels=4,
         patch_size=(1, 2, 2),
         hidden_size=1152,
@@ -181,9 +234,8 @@ class STDiT(nn.Module):
         caption_channels=4096,
         model_max_length=120,
         dtype=torch.float32,
-        space_scale=1.0,
-        time_scale=1.0,
         freeze=None,
+        qk_norm=False,
         enable_flashattn=False,
         enable_layernorm_kernel=False,
         enable_sequence_parallelism=False,
@@ -193,12 +245,6 @@ class STDiT(nn.Module):
         self.in_channels = in_channels
         self.out_channels = in_channels * 2 if pred_sigma else in_channels
         self.hidden_size = hidden_size
-        self.patch_size = patch_size
-        self.input_size = input_size
-        num_patches = np.prod([input_size[i] // patch_size[i] for i in range(3)])
-        self.num_patches = num_patches
-        self.num_temporal = input_size[0] // patch_size[0]
-        self.num_spatial = num_patches // self.num_temporal
         self.num_heads = num_heads
         self.dtype = dtype
         self.no_temporal_pos_emb = no_temporal_pos_emb
@@ -206,15 +252,17 @@ class STDiT(nn.Module):
         self.mlp_ratio = mlp_ratio
         self.enable_flashattn = enable_flashattn
         self.enable_layernorm_kernel = enable_layernorm_kernel
-        self.space_scale = space_scale
-        self.time_scale = time_scale
 
-        self.register_buffer("pos_embed", self.get_spatial_pos_embed())
-        self.register_buffer("pos_embed_temporal", self.get_temporal_pos_embed())
+        # support dynamic input
+        self.patch_size = patch_size
+        self.input_size = input_size
+        self.input_sq_size = input_sq_size
+        self.pos_embed = PositionEmbedding2D(hidden_size)
 
         self.x_embedder = PatchEmbed3D(patch_size, in_channels, hidden_size)
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.t_block = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 6 * hidden_size, bias=True))
+        self.t_block_temp = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 3 * hidden_size, bias=True))  # new
         self.y_embedder = CaptionEmbedder(
             in_channels=caption_channels,
             hidden_size=hidden_size,
@@ -224,9 +272,10 @@ class STDiT(nn.Module):
         )
 
         drop_path = [x.item() for x in torch.linspace(0, drop_path, depth)]
+        self.rope = RotaryEmbedding(dim=self.hidden_size // self.num_heads)  # new
         self.blocks = nn.ModuleList(
             [
-                STDiTBlock(
+                STDiT2ACCBlock(
                     self.hidden_size,
                     self.num_heads,
                     mlp_ratio=self.mlp_ratio,
@@ -234,19 +283,20 @@ class STDiT(nn.Module):
                     enable_flashattn=self.enable_flashattn,
                     enable_layernorm_kernel=self.enable_layernorm_kernel,
                     enable_sequence_parallelism=enable_sequence_parallelism,
-                    d_t=self.num_temporal,
-                    d_s=self.num_spatial,
+                    rope=self.rope.rotate_queries_or_keys,
+                    qk_norm=qk_norm,
                 )
                 for i in range(self.depth)
             ]
         )
-        self.final_layer = T2IFinalLayer(
-            hidden_size,
-            np.prod(self.patch_size),
-            self.out_channels,
-            d_t=self.num_temporal,
-            d_s=self.num_spatial,
-        )
+        self.final_layer = T2IFinalLayer(hidden_size, np.prod(self.patch_size), self.out_channels)
+
+        # multi_res
+        assert self.hidden_size % 3 == 0, "hidden_size must be divisible by 3"
+        self.csize_embedder = SizeEmbedder(self.hidden_size // 3)
+        self.ar_embedder = SizeEmbedder(self.hidden_size // 3)
+        self.fl_embedder = SizeEmbedder(self.hidden_size)  # new
+        self.fps_embedder = SizeEmbedder(self.hidden_size)  # new
 
         # init model
         self.initialize_weights()
@@ -264,8 +314,23 @@ class STDiT(nn.Module):
             self.sp_rank = dist.get_rank(get_sequence_parallel_group())
         else:
             self.sp_rank = None
-        
-    def forward(self, x, timestep, y, mask=None, x_mask=None):
+
+    def get_dynamic_size(self, x):
+        _, _, T, H, W = x.size()
+        if T % self.patch_size[0] != 0:
+            T += self.patch_size[0] - T % self.patch_size[0]
+        if H % self.patch_size[1] != 0:
+            H += self.patch_size[1] - H % self.patch_size[1]
+        if W % self.patch_size[2] != 0:
+            W += self.patch_size[2] - W % self.patch_size[2]
+        T = T // self.patch_size[0]
+        H = H // self.patch_size[1]
+        W = W // self.patch_size[2]
+        return (T, H, W)
+
+    def forward(
+        self, x, timestep, y, mask=None, x_mask=None, num_frames=None, height=None, width=None, ar=None, fps=None
+    ):
         """
         Forward pass of STDiT.
         Args:
@@ -278,66 +343,95 @@ class STDiT(nn.Module):
             x (torch.Tensor): output latent representation; of shape [B, C, T, H, W]
         """
         B = x.shape[0]
-        T, S = self.num_temporal, self.num_spatial  # T=16, S=256
         dtype = self.x_embedder.proj.weight.dtype
         x = x.to(dtype)
         timestep = timestep.to(dtype)
         y = y.to(dtype)
+        # === process data info ===
+        # 1. get dynamic size
+        hw = torch.cat([height[:, None], width[:, None]], dim=1)
+        rs = (height[0].item() * width[0].item()) ** 0.5
+        csize = self.csize_embedder(hw, B)
+
+        # 2. get aspect ratio
+        ar = ar.unsqueeze(1)
+        ar = self.ar_embedder(ar, B)
+        data_info = torch.cat([csize, ar], dim=1)
+
+        # 3. get number of frames
+        fl = num_frames.unsqueeze(1)
+        fps = fps.unsqueeze(1)
+        fl = self.fl_embedder(fl, B)
+        fl = fl + self.fps_embedder(fps, B)
+
+        # === get dynamic shape size ===
+        _, _, Tx, Hx, Wx = x.size()
+        T, H, W = self.get_dynamic_size(x)
+        S = H * W
+        scale = rs / self.input_sq_size
+        base_size = round(S**0.5)
+        pos_emb = self.pos_embed(x, H, W, scale=scale, base_size=base_size)
 
         # embedding
         x = self.x_embedder(x)  # [B, N, C]
-        x = rearrange(x, "B (T S) C -> B T S C", T=self.num_temporal, S=self.num_spatial)
-        x = x + self.pos_embed
+        x = rearrange(x, "B (T S) C -> B T S C", T=T, S=S)
+        x = x + pos_emb
         # x = rearrange(x, "B T S C -> B (T S) C")
 
         # # shard over the sequence dim if sp is enabled
-        # if self.enable_sequence_parallelism:
-        #     x = split_forward_gather_backward(x, get_sequence_parallel_group(), dim=1, grad_scale="down")
-        
         if self.enable_sequence_parallelism:
-            group = get_sequence_parallel_group()
             x = split_forward_gather_backward(x, get_sequence_parallel_group(), dim=2, grad_scale="down")
             S = S // dist.get_world_size(get_sequence_parallel_group())
 
         x = rearrange(x, "B T S C -> B (T S) C", T=T, S=S)
-            
+
+
+        # prepare adaIN
         t = self.t_embedder(timestep, dtype=x.dtype)  # [B, C]
-        t_mlp = self.t_block(t)  # [B, C]
+        t_spc = t + data_info  # [B, C]
+        t_tmp = t + fl  # [B, C]
+        t_spc_mlp = self.t_block(t_spc)  # [B, 6*C]
+        t_tmp_mlp = self.t_block_temp(t_tmp)  # [B, 3*C]
         if x_mask is not None:
             t0_timestep = torch.zeros_like(timestep)
             t0 = self.t_embedder(t0_timestep, dtype=x.dtype)
-            t0_mlp = self.t_block(t0)
+            t0_spc = t0 + data_info
+            t0_tmp = t0 + fl
+            t0_spc_mlp = self.t_block(t0_spc)
+            t0_tmp_mlp = self.t_block_temp(t0_tmp)
         else:
-            t0 = None
-            t0_mlp = None
+            t0_spc = None
+            t0_tmp = None
+            t0_spc_mlp = None
+            t0_tmp_mlp = None
+
+        # prepare y
         y = self.y_embedder(y, self.training)  # [B, 1, N_token, C]
 
         if mask is not None:
             if mask.shape[0] != y.shape[0]:
                 mask = mask.repeat(y.shape[0] // mask.shape[0], 1)
             mask = mask.squeeze(1).squeeze(1) # y shape ([1, 1, 120, 1152]); mask shape [120]
-            y_lens = mask.view(B, 1, 1, 120) # last dim always 120
+            y_lens = mask.view(B, 1, 1, 200) # last dim always 120/200
         else:
             y_lens = [y.shape[2]] * y.shape[0]
             y = y.squeeze(1).view(1, -1, x.shape[-1])
-            
+        
         # blocks
-        for i, block in enumerate(self.blocks):
-            if i == 0:
-                # if self.enable_sequence_parallelism:
-                #     tpe = torch.chunk(
-                #         self.pos_embed_temporal, dist.get_world_size(get_sequence_parallel_group()), dim=1
-                #     )[self.sp_rank].contiguous()
-                # else:
-                #     tpe = self.pos_embed_temporal
-                tpe = self.pos_embed_temporal
-            else:
-                tpe = None
-            x = auto_grad_checkpoint(block, x, y, t_mlp, y_lens, tpe, x_mask, t0_mlp)
-
-        # if self.enable_sequence_parallelism:
-        #     x = gather_forward_split_backward(x, get_sequence_parallel_group(), dim=1, grad_scale="up")
-        # # x.shape: [B, N, C]
+        for _, block in enumerate(self.blocks):
+            x = auto_grad_checkpoint(
+                block,
+                x,
+                y,
+                t_spc_mlp,
+                t_tmp_mlp,
+                y_lens,
+                x_mask,
+                t0_spc_mlp,
+                t0_tmp_mlp,
+                T,
+                S,
+            )
         
         if self.enable_sequence_parallelism:
             x = rearrange(x, "B (T S) C -> B T S C", T=T, S=S)
@@ -346,14 +440,14 @@ class STDiT(nn.Module):
             x = rearrange(x, "B T S C -> B (T S) C", T=T, S=S)
 
         # final process
-        x = self.final_layer(x, t, x_mask, t0)  # [B, N, C=T_p * H_p * W_p * C_out]
-        x = self.unpatchify(x)  # [B, C_out, T, H, W]
+        x = self.final_layer(x, t, x_mask, t0_spc, T, S)  # [B, N, C=T_p * H_p * W_p * C_out]
+        x = self.unpatchify(x, T, H, W, Tx, Hx, Wx)  # [B, C_out, T, H, W]
+
         # cast to float32 for better accuracy
         x = x.to(torch.float32)
         return x
-    
 
-    def unpatchify(self, x):
+    def unpatchify(self, x, N_t, N_h, N_w, R_t, R_h, R_w):
         """
         Args:
             x (torch.Tensor): of shape [B, N, C]
@@ -362,7 +456,7 @@ class STDiT(nn.Module):
             x (torch.Tensor): of shape [B, C_out, T, H, W]
         """
 
-        N_t, N_h, N_w = [self.input_size[i] // self.patch_size[i] for i in range(3)]
+        # N_t, N_h, N_w = [self.input_size[i] // self.patch_size[i] for i in range(3)]
         T_p, H_p, W_p = self.patch_size
         x = rearrange(
             x,
@@ -375,6 +469,8 @@ class STDiT(nn.Module):
             W_p=W_p,
             C_out=self.out_channels,
         )
+        # unpad
+        x = x[:, :, :R_t, :R_h, :R_w]
         return x
 
     def unpatchify_old(self, x):
@@ -387,22 +483,12 @@ class STDiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, t * pt, h * ph, w * pw))
         return imgs
 
-    def get_spatial_pos_embed(self, grid_size=None):
-        if grid_size is None:
-            grid_size = self.input_size[1:]
+    def get_spatial_pos_embed(self, H, W, scale=1.0, base_size=None):
         pos_embed = get_2d_sincos_pos_embed(
             self.hidden_size,
-            (grid_size[0] // self.patch_size[1], grid_size[1] // self.patch_size[2]),
-            scale=self.space_scale,
-        )
-        pos_embed = torch.from_numpy(pos_embed).float().unsqueeze(0).requires_grad_(False)
-        return pos_embed
-
-    def get_temporal_pos_embed(self):
-        pos_embed = get_1d_sincos_pos_embed(
-            self.hidden_size,
-            self.input_size[0] // self.patch_size[0],
-            scale=self.time_scale,
+            (H, W),
+            scale=scale,
+            base_size=base_size,
         )
         pos_embed = torch.from_numpy(pos_embed).float().unsqueeze(0).requires_grad_(False)
         return pos_embed
@@ -440,6 +526,7 @@ class STDiT(nn.Module):
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
         nn.init.normal_(self.t_block[1].weight, std=0.02)
+        nn.init.normal_(self.t_block_temp[1].weight, std=0.02)
 
         # Initialize caption embedding MLP:
         nn.init.normal_(self.y_embedder.y_proj.fc1.weight, std=0.02)
@@ -455,10 +542,10 @@ class STDiT(nn.Module):
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
 
-@MODELS.register_module("STDiT-XL/2")
-def STDiT_XL_2(from_pretrained=None, **kwargs):
-    # model = STDiT(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=16, **kwargs)
-    model = STDiT(depth=28, hidden_size=1024, patch_size=(1, 2, 2), num_heads=16, **kwargs)
+@MODELS.register_module("STDiT2ACC-XL/2")
+def STDiT2_XL_2(from_pretrained=None, **kwargs):
+    # model = STDiT2ACC(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=16, **kwargs)
+    model = STDiT2ACC(depth=28, hidden_size=1536, patch_size=(1, 2, 2), num_heads=24, **kwargs)
     
     if from_pretrained is not None:
         load_checkpoint(model, from_pretrained)

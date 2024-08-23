@@ -1,6 +1,5 @@
 from collections.abc import Iterable
 import torch
-import torch_musa
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint, checkpoint_sequential
 

@@ -5,7 +5,6 @@ from typing import Optional
 import multiprocessing as mp
 
 import torch
-import torch_musa
 from torch.nn import ModuleList
 import torch.distributed as dist
 from torch import Tensor
@@ -30,7 +29,7 @@ def all_reduce_mean(x: float, world_size: int, local_only: bool = True) -> float
 
     if world_size == 1:
         return x
-    tensor = torch.tensor([x], device=torch.musa.current_device(), dtype=torch.float)
+    tensor = torch.tensor([x], device=torch.cuda.current_device(), dtype=torch.float)
     dist.all_reduce(tensor)
     tensor = tensor / world_size
     return tensor.item()
@@ -50,14 +49,14 @@ def run(conn, models, x, t, y, t_tmp, kwarg, recompute):
     Memory results are returned via pipe.
     """
     batch_size, seq_len = x.shape[:2]
-    torch.musa.empty_cache()
-    torch.musa.reset_peak_memory_stats()
-    empty_mem = torch.musa.memory_allocated()
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    empty_mem = torch.cuda.memory_allocated()
     # assert empty_mem == 0
     if not isinstance(models, ModuleList):
         models = ModuleList([models])
-    models = models.musa()
-    x = x.musa()
+    models = models.cuda()
+    x = x.cuda()
     models.train()
     layer_name = ["norm1", "attn", "attn.qkv", "attn.q_norm", "attn.k_norm", "attn.attn_drop", "attn.proj", "attn.proj_drop", 
                   "cross_attn", "mlp.fc1", "mlp.act", "mlp.drop1", "mlp.norm", "mlp.fc2", "mlp.drop2", 
@@ -99,10 +98,10 @@ def run(conn, models, x, t, y, t_tmp, kwarg, recompute):
             # y = module(x, y, t, **kwargs)
             y = module(x, y, t, t_tmp, kwargs['mask'], kwargs['x_mask'], kwargs['t0'], kwargs['t0_tmp'],kwargs['T'], kwargs['S'])
 
-    torch.musa.synchronize()
-    torch.musa.empty_cache()
-    peak_mem = torch.musa.max_memory_allocated() - empty_mem
-    final_mem = torch.musa.memory_allocated()
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    peak_mem = torch.cuda.max_memory_allocated() - empty_mem
+    final_mem = torch.cuda.memory_allocated()
     used_mem = final_mem - empty_mem
     # conn.send((used_mem, peak_mem))
     return used_mem, peak_mem
@@ -431,11 +430,11 @@ class PerformanceEvaluator:
     def on_fit_start(self) -> None:
 
         # Check Memory Usage before training
-        self.optim_init_memory = torch.musa.memory_allocated() - self.total_weight_memory * 1024**3
+        self.optim_init_memory = torch.cuda.memory_allocated() - self.total_weight_memory * 1024**3
         # HACK: we assume that the memory occupied by gradients is the same as the memory occupied by weights
         # self.grad_memory = self.total_weight_memory
-        self.coordinator.print_on_master(f"Allocated CUDA memory before training: {torch.musa.memory_allocated()/1024**3:.3f} GB")
-        self.coordinator.print_on_master(f"Peak CUDA memory before training: {torch.musa.max_memory_allocated()/1024**3:.3f} GB")
+        self.coordinator.print_on_master(f"Allocated CUDA memory before training: {torch.cuda.memory_allocated()/1024**3:.3f} GB")
+        self.coordinator.print_on_master(f"Peak CUDA memory before training: {torch.cuda.max_memory_allocated()/1024**3:.3f} GB")
         self.coordinator.print_on_master(
             f"Peak CPU memory before training: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024**2:.3f} GB"
         )
@@ -465,28 +464,28 @@ class PerformanceEvaluator:
         self.skip_record = (self.ignore_steps > 0 and self.step_cnt < self.ignore_steps)
         if self.skip_record:
             return
-        torch.musa.synchronize()
+        torch.cuda.synchronize()
         self.timer.start()
         
     def before_video_encode(self) -> None:
         if self.skip_record:
             return
         if not self.disable_internal_sync:
-            torch.musa.synchronize()
+            torch.cuda.synchronize()
         self.timer.before_video_encode(torch_profiler_duration=0)
     
     def before_text_encode(self) -> None:
         if self.skip_record:
             return
         if not self.disable_internal_sync:
-            torch.musa.synchronize()
+            torch.cuda.synchronize()
         self.timer.before_text_encode()
 
     def before_forward(self) -> None:
         if self.skip_record:
             return
         if not self.disable_internal_sync:
-            torch.musa.synchronize()
+            torch.cuda.synchronize()
         self.timer.before_forward(torch_profiler_duration=0)
 
     def before_backward(self) -> None:
@@ -494,14 +493,14 @@ class PerformanceEvaluator:
         if self.skip_record:
             return
         if not self.disable_internal_sync:
-            torch.musa.synchronize()
+            torch.cuda.synchronize()
         self.timer.before_backward()
 
     def before_optimizer_update(self) -> None:
         if self.skip_record:
             return
         if not self.disable_internal_sync:
-            torch.musa.synchronize()
+            torch.cuda.synchronize()
         self.timer.before_optimizer_update()
         self.optimizer_update_cnt += 1
 
@@ -510,8 +509,8 @@ class PerformanceEvaluator:
         self.coordinator.print_on_master(
             f"\n"
             f"Step: {self.step_cnt - 1}, Is warming up: {self.skip_record}, "
-            f"Peak Memory: {torch.musa.max_memory_allocated()/1024**3:.3f} GB, "
-            f"Allocated Memory: {torch.musa.memory_allocated()/1024**3:.3f} GB, "
+            f"Peak Memory: {torch.cuda.max_memory_allocated()/1024**3:.3f} GB, "
+            f"Allocated Memory: {torch.cuda.memory_allocated()/1024**3:.3f} GB, "
             f"CPU Memory: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024**2:.3f} GB"
         )
 
@@ -520,7 +519,7 @@ class PerformanceEvaluator:
                 self.step_torch_profiler()
             return
 
-        torch.musa.synchronize()
+        torch.cuda.synchronize()
         current_iter_duration = self.timer.end()
 
         batch_size, seq_len = input_ids.shape
@@ -550,7 +549,7 @@ class PerformanceEvaluator:
             self.torch_profiler.stop()
 
         with open(f"memory_{dist.get_rank()}.log", "w") as f:
-            f.write(torch.musa.memory_summary(device=torch.musa.current_device()))
+            f.write(torch.cuda.memory_summary(device=torch.cuda.current_device()))
 
         if dist.get_rank() != 0:
             return
@@ -609,10 +608,10 @@ class PerformanceEvaluator:
         time_usage_log += f"Avg Step Latency: {1000 * avg_latency:.2f} ms\n"
         self.coordinator.print_on_master(time_usage_log)
         
-        peak_memory = torch.musa.max_memory_allocated()
-        torch.musa.empty_cache()
-        memory_fragmentation = torch.musa.max_memory_reserved() - peak_memory
-        final_allocated_memory = torch.musa.memory_allocated()
+        peak_memory = torch.cuda.max_memory_allocated()
+        torch.cuda.empty_cache()
+        memory_fragmentation = torch.cuda.max_memory_reserved() - peak_memory
+        final_allocated_memory = torch.cuda.memory_allocated()
         optimizer_memory = final_allocated_memory - self.total_weight_memory * 1024**3
         assert optimizer_memory >= self.optim_init_memory, "Optimizer memory should be larger than the initial memory"
         activation_memory = peak_memory - final_allocated_memory - self.grad_memory
@@ -633,5 +632,5 @@ class PerformanceEvaluator:
         #     "Notice: Sometimes the weight and optimizer are initialized together (e.g. booster.boost/deepspeed.initialize), "
         #     "in such cases the calculated Weight memory is the sum of model weight memory and part of optimizer memory, please refer to other logs for model weight memory information."
         # )
-        self.coordinator.print_on_master(torch.musa.memory_summary(device=torch.musa.current_device()))
+        self.coordinator.print_on_master(torch.cuda.memory_summary(device=torch.cuda.current_device()))
 
