@@ -11,7 +11,6 @@
 
 import functools
 import math
-import time
 from typing import Optional
 
 import numpy as np
@@ -48,7 +47,6 @@ class LlamaRMSNorm(nn.Module):
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
         return self.weight * hidden_states.to(input_dtype)
 
-
 # def get_layernorm(hidden_size: torch.Tensor, eps: float, affine: bool, use_kernel: bool):
 #     if use_kernel:
 #         try:
@@ -71,15 +69,12 @@ def modulate(norm_func, x, shift, scale):
     x = x.to(dtype)
     return x
 
-
 def t2i_modulate(x, shift, scale):
     return x * (1 + scale) + shift
-
 
 # ===============================================
 # General-purpose Layers
 # ===============================================
-
 
 class PatchEmbed3D(nn.Module):
     """Video to Patch Embedding.
@@ -171,20 +166,29 @@ class Attention(nn.Module):
         enable_flashattn = self.enable_flashattn and (N > B)
         qkv = self.qkv(x)
         qkv_shape = (B, N, 3, self.num_heads, self.head_dim)
+
         qkv = qkv.view(qkv_shape).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
-        # WARNING: this may be a bug 
+        # WARNING: this may be a bug
         if self.rope:
             q = self.rotary_emb(q)
             k = self.rotary_emb(k)
         q, k = self.q_norm(q), self.k_norm(k)
+        enable_flashattn=False # disable_flashattn
         if enable_flashattn:
+            from flash_attn import flash_attn_func
+
             # (B, #heads, N, #dim) -> (B, N, #heads, #dim)
             q = q.permute(0, 2, 1, 3)
             k = k.permute(0, 2, 1, 3)
             v = v.permute(0, 2, 1, 3)
-            q = q * self.scale
-            x = F.scaled_dot_product_attention(query=q ,key=k ,value=v, dropout_p=self.attn_drop.p)
+            x = flash_attn_func(
+                q,
+                k,
+                v,
+                dropout_p=self.attn_drop.p if self.training else 0.0,
+                softmax_scale=self.scale,
+            )
         else:
             dtype = q.dtype
             q = q * self.scale
@@ -203,7 +207,6 @@ class Attention(nn.Module):
         x = self.proj_drop(x)
         return x
 
-
 class SeqParallelAttention(Attention):
     def __init__(
         self,
@@ -217,7 +220,7 @@ class SeqParallelAttention(Attention):
         enable_flashattn: bool = False,
         rope=None,
     ) -> None:
-        # assert rope is None, "Rope is not supported in SeqParallelAttention"
+        assert rope is None, "Rope is not supported in SeqParallelAttention"
         super().__init__(
             dim=dim,
             num_heads=num_heads,
@@ -240,7 +243,6 @@ class SeqParallelAttention(Attention):
 
         # apply all_to_all to gather sequence and split attention heads
         # [B, SUB_N, 3, NUM_HEAD, HEAD_DIM] -> [B, N, 3, NUM_HEAD_PER_DEVICE, HEAD_DIM]
-        qkv_shape = qkv.shape
         qkv = all_to_all(qkv, sp_group, scatter_dim=3, gather_dim=1)
 
         if self.enable_flashattn:
@@ -265,7 +267,15 @@ class SeqParallelAttention(Attention):
         q, k, v = qkv.unbind(0)
         q, k = self.q_norm(q), self.k_norm(k)
         if self.enable_flashattn:
-            x = F.scaled_dot_product_attention(query=q ,key=k ,value=v, dropout_p=self.attn_drop.p)
+            from flash_attn import flash_attn_func
+
+            x = flash_attn_func(
+                q,
+                k,
+                v,
+                dropout_p=self.attn_drop.p if self.training else 0.0,
+                softmax_scale=self.scale,
+            )
         else:
             dtype = q.dtype
             q = q * self.scale
@@ -289,7 +299,6 @@ class SeqParallelAttention(Attention):
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
-
 
 class MultiHeadCrossAttention(nn.Module):
     def __init__(self, d_model, num_heads, attn_drop=0.0, proj_drop=0.0):
@@ -327,20 +336,40 @@ class MultiHeadCrossAttention(nn.Module):
         #######
         # xformers
         #######
+         # query/value: img tokens; key: condition; mask: if padding tokens
+        # B, N, C = x.shape
+
+        # q = self.q_linear(x).view(1, -1, self.num_heads, self.head_dim)
+        # kv = self.kv_linear(cond).view(1, -1, 2, self.num_heads, self.head_dim)
+        # k, v = kv.unbind(2)
+
+        # attn_bias = None
+        # if mask is not None:
+        #     attn_bias = xformers.ops.fmha.BlockDiagonalMask.from_seqlens([N] * B, mask)
+        # x = xformers.ops.memory_efficient_attention(q, k, v, p=self.attn_drop.p, attn_bias=attn_bias)
+
+        # x = x.view(B, -1, C)
+        # x = self.proj(x)
+        # x = self.proj_drop(x)
+        # return x
+    
         B, N, C = x.shape
         q = self.q_linear(x).view(B, -1, self.num_heads, self.head_dim) 
         kv = self.kv_linear(cond).view(B, -1, 2, self.num_heads, self.head_dim)
         k, v = kv.unbind(2)
         q, k, v = torch.permute(q, (0, 2, 1, 3)), torch.permute(k, (0, 2, 1, 3)), torch.permute(v, (0, 2, 1, 3))
+        # print(f'B {B} mask before {mask.size()}')
         if mask is not None:
+            # print(f"mask {mask.shape} {mask}")
             mask = mask.bool()
             mask = mask.view(B, 1, 1, k.shape[-2]).repeat(1, 1 , q.shape[-2], 1)
         x = F.scaled_dot_product_attention(query=q ,key=k ,value=v, attn_mask=mask, dropout_p=self.attn_drop.p)
+        # x = torch.permute(x, (0, 2, 1, 3))
+        x = x.transpose(1, 2)
         x = x.contiguous().view(B, -1, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
-
 
 class SeqParallelMultiHeadCrossAttention(MultiHeadCrossAttention):
     def __init__(
@@ -369,6 +398,7 @@ class SeqParallelMultiHeadCrossAttention(MultiHeadCrossAttention):
         q = self.q_linear(x).view(B, -1, self.num_heads, self.head_dim)
         kv = self.kv_linear(cond).view(B, -1, 2, self.num_heads, self.head_dim)
         k, v = kv.unbind(2)
+        # print(f"Seq atten Before split q shape {q.shape}, k shape {k.shape}, mask shape {mask.shape}")
 
         # apply all_to_all to gather sequence and split attention heads
         q = all_to_all(q, sp_group, scatter_dim=2, gather_dim=1)
@@ -376,21 +406,20 @@ class SeqParallelMultiHeadCrossAttention(MultiHeadCrossAttention):
         k = split_forward_gather_backward(k, get_sequence_parallel_group(), dim=2, grad_scale="down")
         v = split_forward_gather_backward(v, get_sequence_parallel_group(), dim=2, grad_scale="down")
 
-        q = q.view(B, -1, self.num_heads // sp_size, self.head_dim)
-        k = k.view(B, -1, self.num_heads // sp_size, self.head_dim)
-        v = v.view(B, -1, self.num_heads // sp_size, self.head_dim)
+        q = q.view(1, -1, self.num_heads // sp_size, self.head_dim)
+        k = k.view(1, -1, self.num_heads // sp_size, self.head_dim)
+        v = v.view(1, -1, self.num_heads // sp_size, self.head_dim)
+        # print(f"Seq atten After split q shape {q.shape}, k shape {k.shape}, mask shape {mask.shape}")
 
         # compute attention
-        q, k, v = torch.permute(q, (0, 2, 1, 3)), torch.permute(k, (0, 2, 1, 3)), torch.permute(v, (0, 2, 1, 3))
-        if mask is not None:
-            mask = mask.bool()
-            mask = mask.view(B, 1, 1, k.shape[-2]).repeat(1, 1 , q.shape[-2], 1)
+        attn_bias = None
+        # if mask is not None:
+        #     attn_bias = xformers.ops.fmha.BlockDiagonalMask.from_seqlens([N] * B, mask)
+        # x = xformers.ops.memory_efficient_attention(q, k, v, p=self.attn_drop.p, attn_bias=attn_bias)
         x = F.scaled_dot_product_attention(query=q, key=k, value=v, attn_mask=mask, dropout_p=self.attn_drop.p)
-        # x shape [batch, head, seq, hidden_dim]  # [8, 8, 4096, 72]
-        x = torch.permute(x, (0, 2, 1, 3))
-        # x shape [batch, seq, head, hidden_dim]  # [8, 4096, 8, 72]
+
         # apply all to all to gather back attention heads and scatter sequence
-        x = x.view(B, -1, self.num_heads // sp_size, self.head_dim)
+        # x = x.view(B, -1, self.num_heads // sp_size, self.head_dim)
         x = x.contiguous().view(B, -1, self.num_heads // sp_size, self.head_dim)
         x = all_to_all(x, sp_group, scatter_dim=1, gather_dim=2)
 
@@ -399,7 +428,6 @@ class SeqParallelMultiHeadCrossAttention(MultiHeadCrossAttention):
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
-
 
 class FinalLayer(nn.Module):
     """
@@ -456,11 +484,9 @@ class T2IFinalLayer(nn.Module):
         x = self.linear(x)
         return x
 
-
 # ===============================================
 # Embedding Layers for Timesteps and Class Labels
 # ===============================================
-
 
 class TimestepEmbedder(nn.Module):
     """
@@ -533,7 +559,6 @@ class LabelEmbedder(nn.Module):
             labels = self.token_drop(labels, force_drop_ids)
         return self.embedding_table(labels)
 
-
 class SizeEmbedder(TimestepEmbedder):
     """
     Embeds scalar timesteps into vector representations.
@@ -566,7 +591,6 @@ class SizeEmbedder(TimestepEmbedder):
     @property
     def dtype(self):
         return next(self.parameters()).dtype
-
 
 class CaptionEmbedder(nn.Module):
     """
@@ -647,11 +671,8 @@ class PositionEmbedding2D(nn.Module):
         scale: float = 1.0,
         base_size: Optional[int] = None,
     ):
-        # 1)RuntimeError: Unsupported tensor dtype: ComplexDouble; cause scale: complex; 2)TypeError: can't convert complex to float
-        # grid_h = torch.arange(h, device=device) / scale
-        # grid_w = torch.arange(w, device=device) / scale
-        grid_h = torch.arange(h, device=device) 
-        grid_w = torch.arange(w, device=device) 
+        grid_h = torch.arange(h, device=device) / scale
+        grid_w = torch.arange(w, device=device) / scale
         if base_size is not None:
             grid_h *= base_size / h
             grid_w *= base_size / w
@@ -676,12 +697,10 @@ class PositionEmbedding2D(nn.Module):
     ) -> torch.Tensor:
         return self._get_cached_emb(x.device, x.dtype, h, w, scale, base_size)
 
-
 # ===============================================
 # Sine/Cosine Positional Embedding Functions
 # ===============================================
 # https://github.com/facebookresearch/mae/blob/main/util/pos_embed.py
-
 
 def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False, extra_tokens=0, scale=1.0, base_size=None):
     """
@@ -706,7 +725,6 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False, extra_tokens=
         pos_embed = np.concatenate([np.zeros([extra_tokens, embed_dim]), pos_embed], axis=0)
     return pos_embed
 
-
 def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     assert embed_dim % 2 == 0
 
@@ -717,11 +735,9 @@ def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     emb = np.concatenate([emb_h, emb_w], axis=1)  # (H*W, D)
     return emb
 
-
 def get_1d_sincos_pos_embed(embed_dim, length, scale=1.0):
     pos = np.arange(0, length)[..., None] / scale
     return get_1d_sincos_pos_embed_from_grid(embed_dim, pos)
-
 
 def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     """

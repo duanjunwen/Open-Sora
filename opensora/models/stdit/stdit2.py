@@ -106,7 +106,6 @@ class STDiT2Block(nn.Module):
             qk_norm=qk_norm,
         )
         
-        
         self.scale_shift_table_temporal = nn.Parameter(torch.randn(3, hidden_size) / hidden_size**0.5)  # new
 
     def t_mask_select(self, x_mask, x, masked_x, T, S):

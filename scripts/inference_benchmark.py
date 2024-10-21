@@ -3,9 +3,12 @@ import os
 import colossalai
 import torch
 import torch_musa
+import functools
 import torch.distributed as dist
+from performance_evaluator import PerformanceEvaluator
 from colossalai.cluster import DistCoordinator
 from mmengine.runner import set_random_seed
+from opensora.utils.misc import all_reduce_mean, format_numel_str,format_numel, get_model_numel, requires_grad, to_torch_dtype
 
 from opensora.acceleration.parallel_states import set_sequence_parallel_group
 from opensora.datasets import IMG_FPS, save_sample
@@ -98,6 +101,9 @@ def main():
         model_args["num_frames"] = num_frames
         model_args["ar"] = ar
         model_args["fps"] = fps
+    
+    # initialize Evaluator
+    model_numel, model_numel_trainable = get_model_numel(model)
 
     # ======================================================
     # 4. inference
@@ -112,6 +118,16 @@ def main():
     save_dir = cfg.save_dir
     os.makedirs(save_dir, exist_ok=True)
 
+    torch_profiler = torch.profiler.profile(
+                activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+                # schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(f"/home/dist/hpcai/duanjunwen/Open-Sora/profiler/inference"),
+                record_shapes=True,
+                profile_memory=True,
+                with_stack=True,
+                with_flops=True,
+            )
+    torch_profiler.start()
     # 4.1. batch generation
     for i in range(0, len(prompts), cfg.batch_size):
         # 4.2 sample in hidden space
@@ -173,6 +189,8 @@ def main():
                         save_path = f"{save_path}-{k}"
                     save_sample(sample, fps=cfg.fps // cfg.frame_interval, save_path=save_path)
                     sample_idx += 1
+        torch_profiler.step()
+    torch_profiler.stop()
 
 
 if __name__ == "__main__":

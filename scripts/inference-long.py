@@ -4,6 +4,7 @@ import re
 
 import colossalai
 import torch
+import torch_musa
 import torch.distributed as dist
 from colossalai.cluster import DistCoordinator
 from mmengine.runner import set_random_seed
@@ -146,9 +147,9 @@ def main():
     # 2. runtime variables
     # ======================================================
     torch.set_grad_enabled(False)
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # torch.backends.musa.matmul.allow_tf32 = True
+    # torch.backends.cudnn.allow_tf32 = True
+    device = "musa" if torch.musa.is_available() else "cpu"
     dtype = to_torch_dtype(cfg.dtype)
     set_random_seed(seed=cfg.seed)
     prompts = cfg.prompt

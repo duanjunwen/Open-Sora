@@ -458,6 +458,6 @@ def main():
 
     performance_evaluator.on_fit_end()
 
-# torchrun --nnodes=1 --nproc_per_node=8 scripts/train_benchmark_random_dataset_without_t5.py configs/opensora-v1-1/train/16x256x256.py --data-path /home/dist/hpcai/duanjunwen/Open-Sora/dataset/panda3m/meta/meta_clips_caption_cleaned_text_idx.csv
+# torchrun --nnodes=1 --nproc_per_node=8 scripts/benchmark/train_benchmark_random_dataset_without_t5.py configs/opensora-v1-1/train/16x256x256.py --data-path /home/dist/hpcai/duanjunwen/Open-Sora/dataset/panda3m/meta/meta_clips_caption_cleaned_text_idx.csv
 if __name__ == "__main__":
     main()
